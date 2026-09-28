@@ -1,10 +1,24 @@
 -- Master drift - FIRST DRAFT, 2026-09-28. READ-ONLY (SELECT only).
 -- One row per open, not-started work-order operation, with the work order's
--- copy and its master side by side, and one flag per compared field.
+-- copy and its own revision's master side by side, and one flag per field.
+-- This is LEVEL 1 of master drift; levels 2 and 3 are built by
+-- master_drift.py from this output plus old_revision_masters.sql.
 --
--- NAMING: WO_* = the work order's own copy (dbo.OPERATION of the work order).
---         M_*  = the master line it is compared with.
+-- NAMING: WO_* = the work order's own copy (dbo.OPERATION of the work order):
+--                what the master said when the WO was created, unless the
+--                WO was edited since.
+--         M_*  = the master of the WO's OWN revision (WO.USER_8), today.
+--                WO <> M: master edited in place after the WO was created,
+--                or the WO edited by hand.
 -- fts.sql calls the work order's copy "*_MASTER" - not here, on purpose.
+-- Matched like fts.sql: same SEQUENCE_NO AND same OPERATION_TYPE. Exact here,
+-- because the WO copied its own revision line by line.
+--
+-- NOT HERE: comparison with the CURRENT revision's master. Tried on
+-- 2026-09-28 with the same sequence + name matching: it paired only 508 of
+-- 1,401 older-revision lines, because a new revision inserts a step and
+-- shifts every later step down one slot. Cross-revision pairing needs rules
+-- SQL expresses badly, so it lives in master_drift.py (level 3).
 --
 -- STILL OPEN (see the private OPEN_QUESTIONS.md) - this draft will change:
 --   - "not started" = WO status F/R, op status F/R, no labour ticket.
@@ -82,8 +96,10 @@ SELECT
          WHEN O.LOAD_SIZE_QTY = O_M.LOAD_SIZE_QTY OR (O.LOAD_SIZE_QTY IS NULL AND O_M.LOAD_SIZE_QTY IS NULL) THEN 0 ELSE 1 END AS D_LOAD_SIZE_QTY,
     CASE WHEN O_M.ROWID IS NULL THEN NULL
          WHEN O.SETUP_HRS     = O_M.SETUP_HRS     OR (O.SETUP_HRS     IS NULL AND O_M.SETUP_HRS     IS NULL) THEN 0 ELSE 1 END AS D_SETUP_HRS,
+    -- an EMPTY crew counts as 1 (user, 2026-09-28): NULL vs 1 is not drift.
+    -- The WO_/M_USER_5 columns above still show the raw values.
     CASE WHEN O_M.ROWID IS NULL THEN NULL
-         WHEN O.USER_5        = O_M.USER_5        OR (O.USER_5        IS NULL AND O_M.USER_5        IS NULL) THEN 0 ELSE 1 END AS D_USER_5
+         WHEN ISNULL(O.USER_5, 1) = ISNULL(O_M.USER_5, 1) THEN 0 ELSE 1 END AS D_USER_5
 
 FROM dbo.WORK_ORDER AS WO
 INNER JOIN dbo.PART AS P
@@ -143,7 +159,7 @@ WHERE WO.TYPE = 'W'
   -- OS is something else and stays out too.
   AND (   WO.BASE_ID LIKE '%OP'
        OR WO.BASE_ID LIKE '%OPP')
-  -- AND P.ID LIKE 'M.%'                             -- SCOPE, as in FTS and the probes
+  AND P.ID LIKE 'M.%'                                -- SCOPE, as in FTS and the probes
 ORDER BY
     WO.DESIRED_RLS_DATE,
     WO.BASE_ID,
