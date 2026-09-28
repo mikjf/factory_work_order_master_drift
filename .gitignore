@@ -1,0 +1,21 @@
+# Data never goes in: extracts, caches and the lists this tool produces all
+# carry real part numbers and work orders. The commit guard refuses these
+# extensions even with `git add -f`; this file keeps them out of `git status`.
+*.xlsx
+*.xlsm
+*.xls
+*.parquet
+*.csv
+outputs/
+archive/
+
+# Private notes live in factory_work_order_master_drift_private, never here.
+OPEN_QUESTIONS.md
+ERP_KNOWLEDGE.md
+
+# Local tooling
+.idea/
+.claude/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
