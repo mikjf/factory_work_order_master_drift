@@ -72,7 +72,8 @@ The list is written to
 | `02_NoMasterLine` | WO lines with no own-revision master line (steps added to the order, e.g. rework `S RIL ...`) |
 | `03_OldRevisionWOs` | level 2, one row per work order, with its level 1 and level 3 counts |
 | `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current master's values |
-| `05_Review` | level 1 grouped into patterns - family, project, operation, field, work-order value, master value - with the lines, orders and parts behind each, and empty `VERDICT` / `NOTE` columns to fill in. Start here |
+| `05_Review` | **start here.** Level 1, one row per work order × part × differing field, with its `PATTERN` number and empty `VERDICT` / `NOTE` columns - the one place to fill them in. Filter by pattern, write the verdict once, fill down; change single rows for exceptions |
+| `06_ReviewPatterns` | the same differences grouped into numbered patterns - family, project, operation, field, work-order value, master value - with the orders and parts behind each. Overview only |
 
 Columns: `WO_*` is the work order's value, `M_*` the own-revision master's,
 `CUR_*` the current master's; `D_*` / `D3_*` are 1 where they differ.
