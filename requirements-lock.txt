@@ -1,0 +1,19 @@
+# Every package master_drift.py ran on, dependencies included, at exact versions.
+# requirements.txt says what the script needs; this says what it was proven on.
+#
+# Proven 2026-09-28: the `fwomd` environment (Python 3.12.14, conda-forge,
+# Windows 11) was built from Python plus requirements.txt alone;
+# master_drift.py on the 28 Sep exports matched the `fts` environment's run in
+# all 93,992 workbook cells (only the run timestamp differs).
+#
+# Reproduce:  pip install -r requirements-lock.txt   (on Python 3.12)
+# Regenerate: python -m pip list --format=freeze --exclude pip --exclude setuptools --exclude wheel
+#             (not `pip freeze`, which writes conda's packages as file:// paths)
+et_xmlfile==2.0.0
+numpy==2.5.3
+openpyxl==3.1.5
+packaging==26.3
+pandas==3.0.6
+python-dateutil==2.9.0.post0
+six==1.17.0
+tzdata==2026.4
