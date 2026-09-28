@@ -20,6 +20,9 @@ never inside this repo - it names real parts and orders:
   03_OldRevisionWOs   LEVEL 2: one row per WO built on an older revision
   04_CrossRevision    LEVEL 3 (INDICATIVE): older-revision WO lines against
                       the CURRENT revision's master
+  05_Review           LEVEL 1 grouped into patterns (family, project,
+                      operation, field, WO value, master value) with empty
+                      VERDICT / NOTE columns for a person to fill in
 
 LEVEL 3 - REVIEW AGAIN LATER (agreed with the user, 2026-09-28). A new
 revision inserts steps and shifts later ones, so lines cannot be paired by
@@ -217,6 +220,58 @@ def level2(d, l3):
     return base.join(cats).join(diffs).fillna(0).reset_index()
 
 
+def review(l1):
+    """Level 1 grouped into patterns for a person to judge.
+
+    One row per family x project x WO kind x operation x field x (WO value,
+    master value) x revision state. A line differing in several fields
+    appears once per field, so N_LINES sums to the number of field
+    differences, not of lines. VERDICT and NOTE are left empty to fill in.
+    """
+    rows = []
+    for r in l1.itertuples(index=False):
+        for f, (_, s) in FIELDS.items():
+            if getattr(r, f"D_{s}") != 1:
+                continue
+            wo, ms = getattr(r, f"WO_{f}"), getattr(r, f"M_{f}")
+            rows.append({
+                "FAMILY": r.FAMILY, "PROJECT_CODE": r.PROJECT_CODE, "WO_KIND": r.WO_KIND,
+                "OPERATION": r.OPERATION, "SEQ": r.OPERATION_SEQUENCE, "FIELD": f,
+                "WO_VALUE": code(wo) or "(empty)", "MASTER_VALUE": code(ms) or "(empty)",
+                "WO_NUM": pd.to_numeric(wo, errors="coerce"), "M_NUM": pd.to_numeric(ms, errors="coerce"),
+                "ON_CURRENT_REV": r.ON_CURRENT_REV, "WORK_ORDER": r.WORK_ORDER, "PART_ID": r.PART_ID,
+                "WO_STATUS": r.WO_STATUS, "CREATE_DATE": pd.to_datetime(r.CREATE_DATE),
+            })
+    cols = ["FAMILY", "PROJECT_CODE", "WO_KIND", "OPERATION", "SEQS", "FIELD", "WO_VALUE", "MASTER_VALUE",
+            "DIRECTION", "N_LINES", "N_WOS", "N_PARTS", "ON_CURRENT_REV", "WO_STATUSES", "CREATED_FROM",
+            "CREATED_TO", "HINT", "VERDICT", "NOTE", "WORK_ORDERS", "PARTS"]
+    if not rows:
+        return pd.DataFrame(columns=cols), 0
+    x = pd.DataFrame(rows)
+
+    def joined(s):
+        return ", ".join(map(str, sorted(set(s))))
+
+    keys = ["FAMILY", "PROJECT_CODE", "WO_KIND", "OPERATION", "FIELD", "WO_VALUE", "MASTER_VALUE", "ON_CURRENT_REV"]
+    g = x.groupby(keys, dropna=False).agg(
+        N_LINES=("WORK_ORDER", "size"), N_WOS=("WORK_ORDER", "nunique"), N_PARTS=("PART_ID", "nunique"),
+        SEQS=("SEQ", joined), WO_STATUSES=("WO_STATUS", joined),
+        CREATED_FROM=("CREATE_DATE", "min"), CREATED_TO=("CREATE_DATE", "max"),
+        WORK_ORDERS=("WORK_ORDER", joined), PARTS=("PART_ID", joined),
+        WO_NUM=("WO_NUM", "first"), M_NUM=("M_NUM", "first"),
+    ).reset_index()
+    g["DIRECTION"] = ""
+    g.loc[g.M_NUM > g.WO_NUM, "DIRECTION"] = "master higher"
+    g.loc[g.M_NUM < g.WO_NUM, "DIRECTION"] = "master lower"
+    g["HINT"] = (g.FIELD == "RESOURCE_ID").map({True: "different machine planned", False: ""})
+    g["VERDICT"] = ""   # drift / intentional / wrong master / ?
+    g["NOTE"] = ""
+    g["CREATED_FROM"] = g.CREATED_FROM.dt.date
+    g["CREATED_TO"] = g.CREATED_TO.dt.date
+    g = g.sort_values(["N_LINES", "FAMILY", "OPERATION"], ascending=[False, True, True])
+    return g[cols], len(x)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--drift", type=Path, default=PRIVATE_DIR / "data" / "drift.xlsx")
@@ -251,6 +306,9 @@ def main():
         HINT=lambda x: x.OPERATION.str.startswith("S RIL").map({True: "rework step (S RIL ...)", False: ""}))
     l3 = level3(d, m)
     l2 = level2(d, l3)
+    rv, n_field_diffs = review(l1)
+    if int(rv.N_LINES.sum()) != n_field_diffs:
+        sys.exit(f"review patterns cover {int(rv.N_LINES.sum())} of {n_field_diffs} field differences")
 
     not_extracted = int((l3.CATEGORY == "MASTERS_NOT_EXTRACTED").sum())
     not_in_export = int((l3.CATEGORY == "OWN_LINE_NOT_IN_EXPORT").sum())
@@ -264,6 +322,8 @@ def main():
         ("Check: level 1 flags recomputed", "all agree"),
         ("LEVEL 1 - lines differing from own revision", len(l1)),
         ("LEVEL 1 - work orders with a difference", l1[WO_KEY].drop_duplicates().shape[0]),
+        ("LEVEL 1 - field differences", n_field_diffs),
+        ("LEVEL 1 - review patterns (05_Review)", len(rv)),
         ("Lines with no own-revision master line", len(nomaster)),
         ("LEVEL 2 - work orders on an older revision", len(l2)),
         ("LEVEL 3 - older-revision lines", len(l3)),
@@ -283,9 +343,14 @@ def main():
         nomaster.to_excel(xw, sheet_name="02_NoMasterLine", index=False)
         l2.to_excel(xw, sheet_name="03_OldRevisionWOs", index=False)
         l3.to_excel(xw, sheet_name="04_CrossRevision", index=False)
+        rv.to_excel(xw, sheet_name="05_Review", index=False)
         for ws in xw.sheets.values():
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
+        widths = {"A": 22, "B": 11, "C": 8, "D": 22, "E": 10, "F": 14, "G": 10, "H": 12, "I": 14,
+                  "Q": 26, "R": 14, "S": 30}
+        for col, w in widths.items():
+            xw.sheets["05_Review"].column_dimensions[col].width = w
 
     for k, v in summary:
         print(f"{k:<58} {v}")
