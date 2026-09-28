@@ -100,3 +100,81 @@ WHERE PS.PART_ID IN (
     HAVING COUNT(*) > 1
 )
 ORDER BY PS.PART_ID;
+
+
+-- ============================================================================
+-- 3. Unreleased ('U') work orders that carry labour tickets - one row per
+--    work order. Probe 1b found 258 open and 250 closed operations with
+--    tickets on U work orders. Were they worked, then set back to U?
+--    Compare the ticket dates with CREATE_DATE / DESIRED_RLS_DATE.
+--    Both sides are pre-aggregated to the work-order key, so neither join
+--    can fan out.
+-- ============================================================================
+SELECT
+    WO.BASE_ID                 AS WORK_ORDER,
+    WO.LOT_ID,
+    WO.SPLIT_ID,
+    WO.SUB_ID,
+    WO.PART_ID,
+    WO.USER_8                  AS WO_REV,
+    WO.CREATE_DATE,
+    WO.DESIRED_RLS_DATE,
+    WO.DESIRED_WANT_DATE,
+    WO.CLOSE_DATE,
+    OPS.N_OPS,
+    OPS.N_OPS_U,
+    OPS.N_OPS_C,
+    OPS.N_OPS_X,
+    OPS.N_OPS_OTHER,
+    LT.N_TICKETS,
+    LT.N_OPS_BOOKED,
+    LT.FIRST_TICKET,
+    LT.LAST_TICKET,
+    LT.HOURS_WORKED,
+    LT.GOOD_QTY
+FROM dbo.WORK_ORDER AS WO
+INNER JOIN (
+    SELECT
+        WORKORDER_BASE_ID, WORKORDER_LOT_ID, WORKORDER_SPLIT_ID,
+        WORKORDER_SUB_ID, WORKORDER_TYPE,
+        COUNT(*)                                        AS N_OPS,
+        SUM(CASE WHEN STATUS = 'U' THEN 1 ELSE 0 END)   AS N_OPS_U,
+        SUM(CASE WHEN STATUS = 'C' THEN 1 ELSE 0 END)   AS N_OPS_C,
+        SUM(CASE WHEN STATUS = 'X' THEN 1 ELSE 0 END)   AS N_OPS_X,
+        SUM(CASE WHEN STATUS NOT IN ('U', 'C', 'X') THEN 1 ELSE 0 END)
+                                                        AS N_OPS_OTHER
+    FROM dbo.OPERATION
+    GROUP BY
+        WORKORDER_BASE_ID, WORKORDER_LOT_ID, WORKORDER_SPLIT_ID,
+        WORKORDER_SUB_ID, WORKORDER_TYPE
+) AS OPS
+    ON  OPS.WORKORDER_BASE_ID  = WO.BASE_ID
+    AND OPS.WORKORDER_LOT_ID   = WO.LOT_ID
+    AND OPS.WORKORDER_SPLIT_ID = WO.SPLIT_ID
+    AND OPS.WORKORDER_SUB_ID   = WO.SUB_ID
+    AND OPS.WORKORDER_TYPE     = WO.TYPE
+INNER JOIN (                                         -- INNER: only WOs WITH tickets
+    SELECT
+        WORKORDER_BASE_ID, WORKORDER_LOT_ID, WORKORDER_SPLIT_ID,
+        WORKORDER_SUB_ID, WORKORDER_TYPE,
+        COUNT(*)                         AS N_TICKETS,
+        COUNT(DISTINCT OPERATION_SEQ_NO) AS N_OPS_BOOKED,
+        MIN(TRANSACTION_DATE)            AS FIRST_TICKET,
+        MAX(TRANSACTION_DATE)            AS LAST_TICKET,
+        SUM(HOURS_WORKED)                AS HOURS_WORKED,
+        SUM(GOOD_QTY)                    AS GOOD_QTY
+    FROM dbo.LABOR_TICKET
+    GROUP BY
+        WORKORDER_BASE_ID, WORKORDER_LOT_ID, WORKORDER_SPLIT_ID,
+        WORKORDER_SUB_ID, WORKORDER_TYPE
+) AS LT
+    ON  LT.WORKORDER_BASE_ID  = WO.BASE_ID
+    AND LT.WORKORDER_LOT_ID   = WO.LOT_ID
+    AND LT.WORKORDER_SPLIT_ID = WO.SPLIT_ID
+    AND LT.WORKORDER_SUB_ID   = WO.SUB_ID
+    AND LT.WORKORDER_TYPE     = WO.TYPE
+WHERE WO.TYPE = 'W'
+  AND WO.STATUS = 'U'
+  AND WO.BASE_ID LIKE '%OP%'                         -- SCOPE
+  AND WO.PART_ID LIKE 'M.%'                          -- SCOPE
+ORDER BY LT.LAST_TICKET DESC;
