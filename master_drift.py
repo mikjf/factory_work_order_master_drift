@@ -26,6 +26,8 @@ never inside this repo - it names real parts and orders:
   06_ReviewPatterns   the same grouped into numbered patterns - overview only
   07_StaleUser8       work orders whose USER_8 names an older revision while
                       their routing is the current one (see below)
+  08_VerdictHistory   every line ever given a verdict, carried from list to
+                      list - the memory behind SUGGESTED_VERDICT
 
 STALE USER_8 (user's review, 2026-09-30). USER_8 is a label: an order can
 carry the current revision's routing while USER_8 still names an older one.
@@ -43,6 +45,9 @@ them separated by " / " - delete down to one; a value still containing
 review in the outputs folder (or --verdicts) and carries VERDICT and NOTE
 forward to the same work order, sequence, operation, field and the same
 two values. When a difference changes, it is judged again.
+An open line whose difference (operation, field, both values) was judged
+before on any order gets SUGGESTED_VERDICT and SUGGESTION_BASIS from the
+verdict history (user, 2026-10-12) - a suggestion only, VERDICT stays open.
 INTENTIONAL_CHANGE does not hide a line: it stays listed while the order
 and the master differ (user, 2026-10-12) - the master may be the one to
 change.
@@ -313,7 +318,8 @@ REVIEW_KEYS = ["FAMILY", "PROJECT_CODE", "WO_KIND", "OPERATION", "FIELD", "WO_VA
 REVIEW_LINE_COLUMNS = [
     "PATTERN", "HINT", "FAMILY", "PROJECT_CODE", "WO_KIND", "WORK_ORDER", "PART_ID", "PART_DESCRIPTION",
     "WO_STATUS", "CREATE_DATE", "DESIRED_RLS_DATE", "OPERATION", "SEQ", "FIELD", "WO_VALUE", "MASTER_VALUE",
-    "CUR_MASTER_VALUE", "DIRECTION", "ON_CURRENT_ROUTING", "VERDICT", "NOTE", "VERDICT_FROM"]
+    "CUR_MASTER_VALUE", "DIRECTION", "ON_CURRENT_ROUTING", "VERDICT", "SUGGESTED_VERDICT", "SUGGESTION_BASIS",
+    "NOTE", "VERDICT_FROM"]
 REVIEW_PATTERN_COLUMNS = [
     "PATTERN", "FAMILY", "PROJECT_CODE", "WO_KIND", "OPERATION", "SEQS", "FIELD", "WO_VALUE", "MASTER_VALUE",
     "DIRECTION", "N_LINES", "N_WOS", "N_PARTS", "ON_CURRENT_ROUTING", "WO_STATUSES", "CREATED_FROM", "CREATED_TO",
@@ -387,9 +393,8 @@ def review(l1, l3):
     g = g.sort_values(["N_LINES", "FAMILY", "OPERATION"], ascending=[False, True, True])
     g["PATTERN"] = range(1, len(g) + 1)
     x["PATTERN"] = x["_G"].map(g["PATTERN"])
-    x["VERDICT"] = ""
-    x["NOTE"] = ""
-    x["VERDICT_FROM"] = ""
+    for c in ["VERDICT", "SUGGESTED_VERDICT", "SUGGESTION_BASIS", "NOTE", "VERDICT_FROM"]:
+        x[c] = ""
     lines = x.sort_values(["PATTERN", "WORK_ORDER", "SEQ"])[REVIEW_LINE_COLUMNS]
     g["VERDICTS"] = ""
     return lines, g.reset_index(drop=True)[REVIEW_PATTERN_COLUMNS]
@@ -412,34 +417,69 @@ def find_previous_review(folder, exclude):
     return None, None
 
 
+HISTORY_SHEET = "08_VerdictHistory"
+HISTORY_COLUMNS = CARRY_KEY + ["VERDICT", "NOTE", "JUDGED_IN"]
+
+
+def line_key(df):
+    """The carry key: work order, sequence, operation, field and both values."""
+    return pd.Series(list(zip(
+        df.WORK_ORDER.map(code), df.SEQ.map(seq_key), df.OPERATION.map(code), df.FIELD.map(code),
+        df.WO_VALUE.map(code), df.MASTER_VALUE.map(code))), index=df.index)
+
+
+def pattern_key(df):
+    """The suggestion key: the same difference on any order - operation, field, both values."""
+    return list(zip(df.OPERATION.map(code), df.FIELD.map(code), df.WO_VALUE.map(code), df.MASTER_VALUE.map(code)))
+
+
 def carry_verdicts(lines, path, sheet):
-    """Fill VERDICT / NOTE / VERDICT_FROM from a previous review. Returns stats."""
+    """Fill VERDICT / NOTE / VERDICT_FROM / SUGGESTED_VERDICT from earlier reviews.
+
+    VERDICT is carried when the same line (line_key) was decided in the
+    previous review. The verdict history - every decided line ever, carried
+    from list to list on HISTORY_SHEET, newest judgement first - suggests a
+    verdict for an open line when the same difference (pattern_key) was
+    judged before on any order. A suggestion is never written into VERDICT.
+    Returns (stats, history).
+    """
     stats = {"file": "none found", "previous_decided": 0, "carried": 0, "previous_unknown": [],
-             "previous_decided_gone": 0}
+             "previous_decided_gone": 0, "history": 0, "suggested": 0}
     lines["VERDICT"] = VERDICT_OPTIONS
-    if path is None or lines.empty:
-        return stats
+    lines["SUGGESTED_VERDICT"] = ""
+    lines["SUGGESTION_BASIS"] = ""
+    history = pd.DataFrame(columns=HISTORY_COLUMNS)
+    if path is None:
+        return stats, history
     stats["file"] = f"{path.name} [{sheet}] ({datetime.fromtimestamp(path.stat().st_mtime):%Y-%m-%d %H:%M})"
     prev = pd.read_excel(path, sheet_name=sheet, dtype=str)
     if "NOTE" not in prev:
         prev["NOTE"] = pd.NA
 
-    def key(df):
-        return pd.Series(list(zip(
-            df.WORK_ORDER.map(code), df.SEQ.map(seq_key), df.OPERATION.map(code), df.FIELD.map(code),
-            df.WO_VALUE.map(code), df.MASTER_VALUE.map(code))), index=df.index)
-
-    prev["MATCH_KEY"] = key(prev)
+    prev["MATCH_KEY"] = line_key(prev)
     prev["V"] = prev.VERDICT.map(lambda v: (code(v) or "").strip())
     decided = prev.V.isin(VERDICTS)
     undecided = (prev.V == "") | prev.V.str.contains("/", regex=False)
     stats["previous_decided"] = int(decided.sum())
     stats["previous_unknown"] = sorted(set(prev.loc[~decided & ~undecided, "V"]))
+
+    # history: this review's decisions first (they are the newest), then the
+    # history that review carried; the first judgement of a line wins
+    judged = prev[decided].assign(VERDICT=prev.V, JUDGED_IN=path.name)
+    parts = [judged.reindex(columns=HISTORY_COLUMNS)]
+    if HISTORY_SHEET in pd.ExcelFile(path).sheet_names:
+        parts.append(pd.read_excel(path, sheet_name=HISTORY_SHEET, dtype=str).reindex(columns=HISTORY_COLUMNS))
+    history = pd.concat(parts, ignore_index=True)
+    history = history[history.VERDICT.isin(VERDICTS)]
+    history = history[~line_key(history).duplicated()].reset_index(drop=True)
+    stats["history"] = len(history)
+    if lines.empty:
+        return stats, history
+
     prev = prev.drop_duplicates("MATCH_KEY")
     # a plain dict: tuple keys in a pandas index invite multi-level lookups
     by_key = {r.MATCH_KEY: r for r in prev.itertuples(index=False)}
-
-    k = key(lines)
+    k = line_key(lines)
     for i, kk in k.items():
         p = by_key.get(kk)
         if p is None:
@@ -454,8 +494,24 @@ def carry_verdicts(lines, path, sheet):
             note = f"previous VERDICT text: {p.V}" + (f" | {note}" if note else "")
         lines.at[i, "NOTE"] = note
     current = set(k)
-    stats["previous_decided_gone"] = int(sum(1 for kk in prev.loc[prev.V.isin(VERDICTS), "MATCH_KEY"] if kk not in current))
-    return stats
+    stats["previous_decided_gone"] = int(sum(1 for kk in prev.loc[prev.V.isin(VERDICTS), "MATCH_KEY"]
+                                             if kk not in current))
+
+    by_pattern = {}
+    for pk, v, note in zip(pattern_key(history), history.VERDICT, history.NOTE):
+        by_pattern.setdefault(pk, []).append((v, code(note) or ""))
+    for i, pk in zip(lines.index, pattern_key(lines)):
+        if lines.at[i, "VERDICT"] in VERDICTS or pk not in by_pattern:
+            continue
+        seen = by_pattern[pk]
+        counts = pd.Series([v for v, _ in seen]).value_counts()
+        lines.at[i, "SUGGESTED_VERDICT"] = (counts.index[0] if len(counts) == 1 else
+                                            "MIXED: " + ", ".join(f"{v} x{n}" for v, n in counts.items()))
+        example = next((n for _, n in seen if n), "")
+        lines.at[i, "SUGGESTION_BASIS"] = (f"same difference judged {len(seen)}x before"
+                                           + (f"; note: {example}" if example else ""))
+        stats["suggested"] += 1
+    return stats, history
 
 
 def main():
@@ -511,7 +567,13 @@ def main():
     if not (len(rv_lines) == int(rv_patterns.N_LINES.sum()) == n_field_diffs) or rv_lines.PATTERN.isna().any():
         sys.exit(f"review does not cover every field difference: {len(rv_lines)} lines, "
                  f"{int(rv_patterns.N_LINES.sum())} in patterns, {n_field_diffs} flagged")
-    vs = carry_verdicts(rv_lines, *verdict_src)
+    vs, history = carry_verdicts(rv_lines, *verdict_src)
+    # this run's decided lines join the history too: none are new here (they
+    # were all carried), but keep the history complete if that ever changes
+    now = rv_lines[rv_lines.VERDICT.isin(VERDICTS)].assign(
+        JUDGED_IN=lambda x: x.VERDICT_FROM.where(x.VERDICT_FROM != "", out.name))
+    history = pd.concat([history, now.reindex(columns=HISTORY_COLUMNS)], ignore_index=True)
+    history = history[~line_key(history).duplicated()].reset_index(drop=True)
     if not rv_patterns.empty:
         rv_patterns["VERDICTS"] = rv_patterns.PATTERN.map(
             rv_lines.assign(V=rv_lines.VERDICT.where(rv_lines.VERDICT.isin(VERDICTS), "(open)"))
@@ -549,6 +611,8 @@ def main():
         ("Verdicts - carried to a current difference", vs["carried"]),
         ("Verdicts - decided before, difference gone or changed", vs["previous_decided_gone"]),
         ("Verdicts - still to decide in 05_Review", int((~rv_lines.VERDICT.isin(VERDICTS)).sum())),
+        ("Verdicts - of those, with a SUGGESTED_VERDICT", vs["suggested"]),
+        (f"Verdicts - history ({HISTORY_SHEET}), every line ever decided", len(history)),
     ]
     summary += [(f"Verdicts - {v}", int((rv_lines.VERDICT == v).sum())) for v in VERDICTS]
 
@@ -561,6 +625,7 @@ def main():
         rv_lines.to_excel(xw, sheet_name="05_Review", index=False)
         rv_patterns.to_excel(xw, sheet_name="06_ReviewPatterns", index=False)
         stale.to_excel(xw, sheet_name="07_StaleUser8", index=False)
+        history.to_excel(xw, sheet_name=HISTORY_SHEET, index=False)
         for ws in xw.sheets.values():
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
@@ -568,7 +633,8 @@ def main():
             "00_Summary": {"A": 62, "B": 60},
             "05_Review": {"A": 8, "B": 30, "C": 22, "D": 11, "E": 8, "F": 14, "G": 16, "H": 30, "I": 9,
                           "J": 11, "K": 11, "L": 24, "M": 7, "N": 14, "O": 10, "P": 12, "Q": 12, "R": 13,
-                          "S": 8, "T": 40, "U": 30, "V": 24},
+                          "S": 8, "T": 40, "U": 22, "V": 50, "W": 30, "X": 24},
+            HISTORY_SHEET: {"A": 14, "B": 7, "C": 24, "D": 14, "E": 10, "F": 12, "G": 22, "H": 50, "I": 30},
             "06_ReviewPatterns": {"A": 8, "B": 22, "C": 11, "D": 8, "E": 22, "F": 10, "G": 14, "H": 10,
                                   "I": 12, "J": 13, "R": 30, "S": 30},
         }.items():

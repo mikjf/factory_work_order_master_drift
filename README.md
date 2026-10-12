@@ -96,6 +96,14 @@ each verdict and note forward to the same work order, sequence, operation,
 field and the same two values; `VERDICT_FROM` says where it came from. When
 a difference changes, it comes back open, to be judged again.
 
+Every verdict ever given is kept on `08_VerdictHistory` and passed on from
+list to list, also after its line has gone. When an open row shows a
+difference already judged on another order - same operation, field and both
+values - `SUGGESTED_VERDICT` proposes the earlier verdict (or `MIXED: ...`
+when it was judged differently) and `SUGGESTION_BASIS` says how often and
+with which note. It is only a suggestion: `VERDICT` stays open until you
+choose.
+
 ### Output sheets
 
 | Sheet | Content |
@@ -108,6 +116,7 @@ a difference changes, it comes back open, to be judged again.
 | `05_Review` | **start here.** Level 1, one row per work order × part × differing field, with its `PATTERN` number, `VERDICT` / `NOTE` (carried from the last review where nothing changed) - the one place to fill them in. For an older-revision order `CUR_MASTER_VALUE` shows today's master value, and `HINT` says when the order already matches it. Filter by pattern, write the verdict once, fill down; change single rows for exceptions |
 | `06_ReviewPatterns` | the same differences grouped into numbered patterns - family, project, operation, field, work-order value, master value - with the orders, parts and verdicts behind each. Overview only |
 | `07_StaleUser8` | orders moved onto the current routing because `USER_8` is out of date, with what they showed before |
+| `08_VerdictHistory` | every line ever given a verdict, with its note and the list it was judged in - the memory behind the suggestions |
 
 Columns: `WO_*` is the work order's value, `M_*` the own-revision master's,
 `CUR_*` the current master's; `D_*` / `D3_*` are 1 where they differ.
