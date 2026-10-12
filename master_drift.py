@@ -14,22 +14,20 @@ two files were saved on different days.
 
 Output: <repo>_private\\outputs\\master_drift_list_<date>.xlsx by default,
 never inside this repo - it names real parts and orders:
-  00_Summary          counts, checks, one line per LABEL with its verdicts
-  01_OrdersToUpdate   same resource, other values differ: the order should
-                      follow the master
-  02_ResourceCheck    the resource differs: usually intentional, always looked at
-  03_Information      order already matches today's master
-                      (01-03: one row per work-order line, LABEL naming
-                      exactly what differs; rules in THE PLANNERS' LISTS below)
-  04_Drift            LEVEL 1 detail: WO copy differs from its master
-  05_NoMasterLine     WO lines with no own-revision master line
-  06_OldRevisionWOs   LEVEL 2: one row per WO built on an older revision
-  07_CrossRevision    LEVEL 3 (INDICATIVE): older-revision WO lines against
+  00_Summary          counts per scenario and label, checks, since last list
+  01_DriftList        THE list: one row per line that does not match its
+                      master, with SCENARIO, LABEL, REVISION, the ROWIDs, the
+                      order's / master's / today's master's values, NOTE -
+                      see THE DRIFT LIST below
+  02_SinceLastList    what happened to each line of the previous list that is
+                      not listed again unchanged: fixed (order / master
+                      updated) or started on the old values - see
+                      fates_since_last() (user, 2026-10-12)
+  03_OldRevisionWOs   LEVEL 2: one row per WO built on an older revision
+  04_CrossRevision    LEVEL 3 (INDICATIVE): older-revision WO lines against
                       the CURRENT revision's master
-  08_StaleUser8       work orders whose USER_8 names an older revision while
+  05_StaleUser8       work orders whose USER_8 names an older revision while
                       their routing is the current one (see below)
-  09_VerdictHistory   every line ever given a verdict, carried from list to
-                      list - the memory behind SUGGESTED_VERDICT
 
 STALE USER_8 (user's review, 2026-09-30). USER_8 is a label: an order can
 carry the current revision's routing while USER_8 still names an older one.
@@ -37,22 +35,15 @@ An older-revision order is treated as being on the current revision when
 every one of its not-started lines matches the current master on sequence,
 operation name and every compared value, and they do not all match its own
 revision. Its lines are then compared with the current master, and it is
-listed on 08_StaleUser8. Only the not-started lines are visible here, so
+listed on 05_StaleUser8. Only the not-started lines are visible here, so
 "every line" means every line in this export.
 
-VERDICTS. On 01-03 the VERDICT column is empty by default and is filled
-only for exceptions, with exactly one of VERDICTS (chosen with the user,
-2026-09-28/30); empty or a value containing " / " counts as open. The next
-run reads the most recently saved list in the outputs folder (or
---verdicts) and carries VERDICT and NOTE forward to the same work order,
-sequence, operation and the same differences (DIFF_KEY). When a difference
-changes, it is open again. An open line whose operation and differences
-were judged before on any order gets SUGGESTED_VERDICT and
-SUGGESTION_BASIS from the verdict history - a suggestion only.
-INTENTIONAL_CHANGE does not hide a line: it stays listed while the order
-and the master differ (user, 2026-10-12) - the master may be the one to
-change. Lists and reviews made before 2026-10-12 (one row per field) are
-read too: their verdicts are combined per line.
+NOTES. The next run reads the most recently saved list in the outputs
+folder (or --previous) and carries NOTE to the same work order, step,
+operation and the same differences (DIFF_KEY); it also fills
+02_SinceLastList from it. Verdict columns existed until 2026-10-12 (the
+user then chose rules plus a free NOTE); workbooks of that time are still
+read, and a verdict given there survives as "earlier verdict: ..." in NOTE.
 
 LEVEL 3 - REVIEW AGAIN LATER (agreed with the user, 2026-09-28). A new
 revision inserts steps and shifts later ones, so lines cannot be paired by
@@ -93,15 +84,6 @@ FIELDS = {
     "SETUP_HRS": (False, "SETUP_HRS"),
     "USER_5": (False, "USER_5"),
 }
-
-# MASTER_DRIFT        the master changed after the order was created (improved)
-# ORIG_MASTER_WRONG   the master was already wrong when the order was created
-#                     and has been corrected since - same action as MASTER_DRIFT
-# INTENTIONAL_CHANGE  the order was changed on purpose (e.g. by supply, the PM)
-# WO_WRONG            the order was edited by mistake; the master did not change
-# MASTER_WRONG        the order is right; the master is wrong today
-# UNCLEAR             asked, no clear answer yet
-VERDICTS = ["MASTER_DRIFT", "ORIG_MASTER_WRONG", "INTENTIONAL_CHANGE", "WO_WRONG", "MASTER_WRONG", "UNCLEAR"]
 
 DRIFT_COLUMNS = (
     LINE_KEY
@@ -149,6 +131,9 @@ def load(path, required):
 
 
 def normalise_drift(d):
+    # WORKORDER_OPS_ROWID is optional: exports before 2026-10-12 lack it
+    if "WORKORDER_OPS_ROWID" not in d:
+        d["WORKORDER_OPS_ROWID"] = pd.NA
     for c in ["WO_REV", "CURRENT_REV", "OPERATION", "WO_KIND", "WO_STATUS", "OP_STATUS", "PART_ID"]:
         d[c] = d[c].map(code)
     for f, (text, _) in FIELDS.items():
@@ -273,6 +258,7 @@ def level3(d, m):
                 rec["CATEGORY"] = cat
                 if cline is not None:
                     rec["CUR_SEQUENCE_NO"] = cline.SEQUENCE_NO
+                    rec["CUR_MASTER_OPS_ROWID"] = cline.MASTER_OPS_ROWID
                     for f in FIELDS:
                         rec[f"CUR_{f}"] = cline[f]
         out.append(rec)
@@ -281,8 +267,9 @@ def level3(d, m):
     for f in FIELDS:
         if f"CUR_{f}" not in res:
             res[f"CUR_{f}"] = pd.NA
-    if "CUR_SEQUENCE_NO" not in res:
-        res["CUR_SEQUENCE_NO"] = pd.NA
+    for c in ("CUR_SEQUENCE_NO", "CUR_MASTER_OPS_ROWID"):
+        if c not in res:
+            res[c] = pd.NA
     if "CATEGORY" not in res:
         res["CATEGORY"] = pd.NA
     old = old.join(res)
@@ -313,37 +300,49 @@ def level2(d, l3):
 
 
 # ---------------------------------------------------------------------------
-# THE PLANNERS' LISTS (agreed with the user, 2026-10-12)
+# THE DRIFT LIST (agreed with the user, 2026-10-12)
 #
-# One row per work-order line that differs from its master (level 1). Each
-# line gets a LABEL naming exactly what differs, and goes to one list, rules
-# checked in this order:
-#   1. Order already matches today's master -> 03_Information
-#      (older-revision line, level 3 paired it and every value equals the
-#       current master: the difference is only with its own old revision)
-#   2. Same resource, other values differ  -> 01_OrdersToUpdate
-#      (28 Sep review: 51 of 51 decided lines - the order follows the master)
-#   3. Different resource                  -> 02_ResourceCheck
-#      (28 Sep review: 9 of 13 intentional, 4 not - always looked at)
+# One row per open, not-started work-order line that does NOT simply match
+# its master. Each row has exactly one SCENARIO, decided in this order:
+#   No master line            no own-revision master line to compare with
+#                             (a step added to the order: rework, test samples)
+#   Order already matches today's master
+#                             an older-revision line that differs from its own
+#                             old revision, while every value equals the
+#                             current master (level 3 paired it)
+#   Resource changed - check  the resource differs (28 Sep review: 9 of 13
+#                             intentional, 4 not - always looked at)
+#   Order to update           same resource, another value differs (28 Sep
+#                             review: 51 of 51 - the order follows the master)
+#   Differs from today's master (older revision, indicative)
+#                             matches its own old revision, but level 3 found
+#                             a different value in the current master
+# Lines that match their master are counted, not listed. LABEL names exactly
+# what differs - resource, rate, setup, run type, load size, crew; for the
+# last scenario it describes the difference with today's master.
+# REVISION describes the ORDER: current / older / older - USER_8 out of date.
+# NOTE is free text and is carried to the same line next time.
 # ---------------------------------------------------------------------------
 
-# label names, in label order; the resource decides "same" / "different"
 NAMES = {"RUN": "rate", "SETUP_HRS": "setup", "RUN_TYPE": "run type", "LOAD_SIZE_QTY": "load size",
          "USER_5": "crew"}
-LISTS = {  # key -> (sheet, name shown in the LIST column)
-    "update": ("01_OrdersToUpdate", "Orders to update"),
-    "check": ("02_ResourceCheck", "Resource changed - check"),
-    "info": ("03_Information", "Order already matches today's master"),
+SCENARIOS = {  # key -> shown name; dict order = sort order of the list
+    "update": "Order to update",
+    "check": "Resource changed - check",
+    "today": "Differs from today's master (older revision, indicative)",
+    "info": "Order already matches today's master",
+    "nomaster": "No master line",
 }
-HISTORY_SHEET = "09_VerdictHistory"
-OLD_HISTORY_SHEET = "08_VerdictHistory"        # field-level, lists of 2026-10-12 morning
-OLD_REVIEW_SHEETS = ("05_Review", "Lines")     # field-level; "Lines" = hand-built review of 28 Sep
-LIST_COLUMNS = [
-    "LIST", "LABEL", "FAMILY", "PROJECT_CODE", "WO_KIND", "WORK_ORDER", "PART_ID", "PART_DESCRIPTION",
-    "WO_STATUS", "CREATE_DATE", "DESIRED_RLS_DATE", "OPERATION", "SEQ", "ON_CURRENT_ROUTING",
-    "DIFFERENCES", "TODAY_MASTER", "VERDICT", "SUGGESTED_VERDICT", "SUGGESTION_BASIS", "NOTE",
-    "VERDICT_FROM", "DIFF_KEY"]
-HISTORY_COLUMNS = ["WORK_ORDER", "SEQ", "OPERATION", "LABEL", "DIFF_KEY", "VERDICT", "NOTE", "JUDGED_IN"]
+LIST_SHEET = "01_DriftList"
+# older workbooks still read for NOTE carry and 02_SinceLastList
+OLD_LIST_SHEETS = ("01_OrdersToUpdate", "02_ResourceCheck", "03_Information")   # 2026-10-12 afternoon
+OLD_REVIEW_SHEETS = ("05_Review", "Lines")                                      # one row per field
+VALUE_COLUMNS = [f"{p}_{f}" for f in FIELDS for p in ("WO", "M", "CUR")]
+LIST_COLUMNS = (
+    ["SCENARIO", "LABEL", "REVISION", "WORKORDER_OPS_ROWID", "MASTER_OPS_ROWID", "CUR_MASTER_OPS_ROWID",
+     "FAMILY", "PART_ID", "PART_DESCRIPTION", "PROJECT_CODE", "WO_KIND", "WORK_ORDER", "WO_STATUS",
+     "CREATE_DATE", "DESIRED_RLS_DATE", "WO_REV", "CURRENT_REV", "OPERATION", "STEP"]
+    + VALUE_COLUMNS + ["DIFFERENCES", "NOTE", "DIFF_KEY"])
 
 
 def seq_key(v):
@@ -361,110 +360,134 @@ def make_diff_key(pairs):
     return "; ".join(f"{f}={pairs[f][0]}|{pairs[f][1]}" for f in FIELDS if f in pairs)
 
 
+def parse_diff_key(diff_key):
+    """'RUN=60|50; SETUP_HRS=0|1' -> {'RUN': ('60', '50'), 'SETUP_HRS': ('0', '1')}."""
+    out = {}
+    for part in str(diff_key or "").split("; "):
+        if "=" in part and "|" in part:
+            f, vals = part.split("=", 1)
+            o, mm = vals.split("|", 1)
+            out[f] = (o, mm)
+    return out
+
+
 def label_of(fields):
     others = [n for f, n in NAMES.items() if f in fields]
     if "RESOURCE_ID" in fields:
         return "different resource" + (": " + " + ".join(others) if others else ", nothing else")
-    return "same resource: " + " + ".join(others)
+    return "same resource: " + " + ".join(others) if others else ""
 
 
-def label_of_key(diff_key):
-    return label_of({p.split("=")[0] for p in str(diff_key).split("; ") if p})
+def describe(pairs, master="master"):
+    return "; ".join(f"{NAMES.get(f, 'resource')}: order {o} / {master} {mm}" for f, (o, mm) in pairs.items())
 
 
-def build_lists(l1, l3):
-    """Level 1 lines with LIST, LABEL, DIFFERENCES and TODAY_MASTER. See the rules above."""
-    rows = []
-    for idx, r in zip(l1.index, l1.itertuples(index=False)):
-        diff = [f for f, (_, s) in FIELDS.items() if getattr(r, f"D_{s}") == 1]
-        pairs = {f: (shown(getattr(r, f"WO_{f}")), shown(getattr(r, f"M_{f}"))) for f in diff}
+def build_list(d, l3):
+    """The drift list: one row per line that does not match its master. See above."""
+    flags = {f: f"D_{s}" for f, (_, s) in FIELDS.items()}
+    rows, matching = [], 0
+    for idx, r in zip(d.index, d.itertuples(index=False)):
         compared = idx in l3.index and pd.notna(l3.at[idx, "CUR_SEQUENCE_NO"])
-        today = ""
-        if compared:
-            today = "; ".join(f"{NAMES.get(f, 'resource')}: {shown(l3.at[idx, f'CUR_{f}'])}" for f in diff)
-        if compared and l3.at[idx, "D3_ANY"] == 0:
-            key = "info"
-        elif "RESOURCE_ID" in diff:
-            key = "check"
+        own = [f for f in FIELDS if getattr(r, flags[f]) == 1] if r.NO_MASTER_LINE == 0 else []
+        today = [f for f, (_, s) in FIELDS.items() if compared and l3.at[idx, f"D3_{s}"] == 1]
+        if r.NO_MASTER_LINE == 1:
+            key, pairs = "nomaster", {}
+        elif own and compared and not today:
+            key, pairs = "info", {f: (shown(getattr(r, f"WO_{f}")), shown(getattr(r, f"M_{f}"))) for f in own}
+        elif own:
+            key = "check" if "RESOURCE_ID" in own else "update"
+            pairs = {f: (shown(getattr(r, f"WO_{f}")), shown(getattr(r, f"M_{f}"))) for f in own}
+        elif today:
+            key = "today"
+            pairs = {f: (shown(getattr(r, f"WO_{f}")), shown(l3.at[idx, f"CUR_{f}"])) for f in today}
         else:
-            key = "update"
-        rows.append({
-            "_LIST": key, "LIST": LISTS[key][1], "LABEL": label_of(diff),
-            "FAMILY": r.FAMILY, "PROJECT_CODE": r.PROJECT_CODE, "WO_KIND": r.WO_KIND,
-            "WORK_ORDER": r.WORK_ORDER, "PART_ID": r.PART_ID, "PART_DESCRIPTION": r.PART_DESCRIPTION,
+            matching += 1
+            continue
+        rec = {
+            "_S": list(SCENARIOS).index(key), "SCENARIO": SCENARIOS[key],
+            "LABEL": "no master line" if key == "nomaster" else label_of(pairs),
+            "REVISION": ("current" if r.ON_CURRENT_REV == 1 else
+                         "older - USER_8 out of date" if r.USER_8_STALE == 1 else "older"),
+            "WORKORDER_OPS_ROWID": r.WORKORDER_OPS_ROWID, "MASTER_OPS_ROWID": r.MASTER_OPS_ROWID,
+            "CUR_MASTER_OPS_ROWID": l3.at[idx, "CUR_MASTER_OPS_ROWID"] if compared else pd.NA,
+            "FAMILY": r.FAMILY, "PART_ID": r.PART_ID, "PART_DESCRIPTION": r.PART_DESCRIPTION,
+            "PROJECT_CODE": r.PROJECT_CODE, "WO_KIND": r.WO_KIND, "WORK_ORDER": r.WORK_ORDER,
             "WO_STATUS": r.WO_STATUS, "CREATE_DATE": pd.to_datetime(r.CREATE_DATE).date(),
             "DESIRED_RLS_DATE": pd.to_datetime(r.DESIRED_RLS_DATE).date(),
-            "OPERATION": r.OPERATION, "SEQ": r.OPERATION_SEQUENCE, "ON_CURRENT_ROUTING": r.ON_CURRENT_ROUTING,
-            "DIFFERENCES": "; ".join(f"{NAMES.get(f, 'resource')}: order {a} / master {b}"
-                                     for f, (a, b) in pairs.items()),
-            "TODAY_MASTER": today, "DIFF_KEY": make_diff_key(pairs),
-        })
-    cols = ["_LIST"] + LIST_COLUMNS
-    if not rows:
-        return pd.DataFrame(columns=cols)
-    x = pd.DataFrame(rows)
-    for c in ["VERDICT", "SUGGESTED_VERDICT", "SUGGESTION_BASIS", "NOTE", "VERDICT_FROM"]:
-        x[c] = ""
-    return x.sort_values(["_LIST", "LABEL", "OPERATION", "WORK_ORDER", "SEQ"])[cols].reset_index(drop=True)
+            "WO_REV": r.WO_REV, "CURRENT_REV": r.CURRENT_REV, "OPERATION": r.OPERATION,
+            "STEP": r.OPERATION_SEQUENCE,
+            "DIFFERENCES": describe(pairs, "today's master" if key == "today" else "master"),
+            "NOTE": "", "DIFF_KEY": make_diff_key(pairs),
+        }
+        for f in FIELDS:
+            rec[f"WO_{f}"] = getattr(r, f"WO_{f}")
+            rec[f"M_{f}"] = getattr(r, f"M_{f}")
+            rec[f"CUR_{f}"] = l3.at[idx, f"CUR_{f}"] if compared else pd.NA
+        rows.append(rec)
+    x = pd.DataFrame(rows, columns=["_S"] + LIST_COLUMNS)
+    return x.sort_values(["_S", "LABEL", "OPERATION", "WORK_ORDER", "STEP"]).reset_index(drop=True), matching
 
 
-def verdict_state(v):
-    """'decided' / 'open' / 'unknown' for a VERDICT cell."""
-    v = (code(v) or "").strip()
-    if v in VERDICTS:
-        return "decided"
-    if v == "" or "/" in v:
-        return "open"
-    return "unknown"
+def line_key(df, seq_col):
+    return list(zip(df.WORK_ORDER.map(code), df[seq_col].map(seq_key), df.OPERATION.map(code),
+                    df.DIFF_KEY.map(lambda v: code(v) or "")))
 
 
-def fields_to_lines(df, by_extra=()):
-    """Convert a field-level review (one row per differing field) to one row per line."""
+def fold_verdict(verdict, note):
+    """Earlier workbooks had a VERDICT column; its value survives in NOTE."""
+    v, note = (code(verdict) or "").strip(), code(note) or ""
+    if not v or "/" in v:
+        return note
+    return f"earlier verdict: {v}" + (f" | {note}" if note else "")
+
+
+def fields_to_lines(df):
+    """One-row-per-field review (before 2026-10-12) -> one row per line."""
     df = df.copy()
     if "NOTE" not in df:
         df["NOTE"] = pd.NA
     df["_W"], df["_S"], df["_O"] = df.WORK_ORDER.map(code), df.SEQ.map(seq_key), df.OPERATION.map(code)
     out = []
-    for keys, g in df.groupby(["_W", "_S", "_O", *by_extra], dropna=False):
+    for (w, s, o), g in df.groupby(["_W", "_S", "_O"], dropna=False):
         pairs = {code(f): (code(a) or "(empty)", code(b) or "(empty)")
                  for f, a, b in zip(g.FIELD, g.WO_VALUE, g.MASTER_VALUE)}
         texts = sorted({(code(v) or "").strip() for v in g.VERDICT})
-        decided = [t for t in texts if t in VERDICTS]
-        # one verdict for the line only if its fields agree; otherwise it is open
-        verdict = texts[0] if len(texts) == 1 else " / ".join(t for t in texts if t)
         notes = sorted({code(n) for n in g.NOTE if code(n)})
-        rec = {"WORK_ORDER": keys[0], "SEQ": keys[1], "OPERATION": keys[2], "DIFF_KEY": make_diff_key(pairs),
-               "VERDICT": verdict, "NOTE": " | ".join(notes), "_CONFLICT": len(decided) > 1}
-        for name, val in zip(by_extra, keys[3:]):
-            rec[name] = val
-        out.append(rec)
+        out.append({"WORK_ORDER": w, "SEQ": s, "OPERATION": o, "DIFF_KEY": make_diff_key(pairs),
+                    "NOTE": fold_verdict(" / ".join(t for t in texts if t) if len(texts) > 1 else texts[0],
+                                         " | ".join(notes)),
+                    "SCENARIO": ""})
     return pd.DataFrame(out)
 
 
 def read_previous(path):
-    """(previous lines, previous history), both one row per line, from any of our formats."""
+    """The previous list as WORK_ORDER / SEQ / OPERATION / DIFF_KEY / NOTE / SCENARIO, any of our formats."""
     sheets = pd.ExcelFile(path).sheet_names
-    new_fmt = [s for s, _ in LISTS.values() if s in sheets]
-    if new_fmt:
-        prev = pd.concat([pd.read_excel(path, sheet_name=s, dtype=str) for s in new_fmt], ignore_index=True)
-        prev["_CONFLICT"] = False
+    if LIST_SHEET in sheets:
+        p = pd.read_excel(path, sheet_name=LIST_SHEET, dtype=str).rename(columns={"STEP": "SEQ"})
+    elif any(s in sheets for s in OLD_LIST_SHEETS):
+        p = pd.concat([pd.read_excel(path, sheet_name=s, dtype=str) for s in OLD_LIST_SHEETS if s in sheets],
+                      ignore_index=True)
+        p["NOTE"] = [fold_verdict(v, n) for v, n in zip(p.VERDICT, p.NOTE)]
+        p["SCENARIO"] = p.get("LIST", "")
     else:
         sheet = next(s for s in OLD_REVIEW_SHEETS if s in sheets)
-        prev = fields_to_lines(pd.read_excel(path, sheet_name=sheet, dtype=str))
-    if HISTORY_SHEET in sheets:
-        hist = pd.read_excel(path, sheet_name=HISTORY_SHEET, dtype=str)
-    elif OLD_HISTORY_SHEET in sheets:
-        hist = fields_to_lines(pd.read_excel(path, sheet_name=OLD_HISTORY_SHEET, dtype=str), ("JUDGED_IN",))
-    else:
-        hist = pd.DataFrame(columns=HISTORY_COLUMNS)
-    return prev, hist
+        p = fields_to_lines(pd.read_excel(path, sheet_name=sheet, dtype=str))
+    for c in ("NOTE", "SCENARIO", "DIFF_KEY"):
+        if c not in p:
+            p[c] = ""
+    return p[["WORK_ORDER", "SEQ", "OPERATION", "DIFF_KEY", "NOTE", "SCENARIO"]].fillna("")
 
 
-def find_previous(folder, exclude):
-    """Most recently saved workbook in folder holding lists or a review, or None."""
-    wanted = {s for s, _ in LISTS.values()} | set(OLD_REVIEW_SHEETS)
-    files = [p for p in folder.glob("*.xlsx")
-             if not p.name.startswith("~$") and p.resolve() != exclude.resolve()]
+def find_previous(folder):
+    """Most recently saved workbook in folder holding a list (any of our formats), or None.
+
+    The output file itself counts: a second run on the same day overwrites
+    the list of the first, and must still read it (it is read before the
+    new list is written).
+    """
+    wanted = {LIST_SHEET, *OLD_LIST_SHEETS, *OLD_REVIEW_SHEETS}
+    files = [p for p in folder.glob("*.xlsx") if not p.name.startswith("~$")]
     for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             if wanted & set(pd.ExcelFile(p).sheet_names):
@@ -474,76 +497,83 @@ def find_previous(folder, exclude):
     return None
 
 
-def line_key(df):
-    return list(zip(df.WORK_ORDER.map(code), df.SEQ.map(seq_key), df.OPERATION.map(code), df.DIFF_KEY.map(code)))
+def carry_notes(lst, prev):
+    """NOTE from the previous list, to the same work order, step, operation and differences."""
+    if prev is None or prev.empty:
+        return 0
+    notes = {k: n for k, n in zip(line_key(prev, "SEQ"), prev.NOTE) if code(n)}
+    carried = 0
+    for i, k in zip(lst.index, line_key(lst, "STEP")):
+        if k in notes:
+            lst.at[i, "NOTE"] = notes[k]
+            carried += 1
+    return carried
 
 
-def carry_verdicts(lines, path, stale_wos=()):
-    """Carry VERDICT / NOTE from the previous lists, keep the history, suggest verdicts.
+def same_value(a, b, field):
+    """One value against another as the comparison does: numbers as numbers, blank crew = 1."""
+    def norm(v):
+        v = None if v is None or (not isinstance(v, str) and pd.isna(v)) else v
+        v = None if v in ("(empty)", "") else v
+        if v is None and field in NULL_AS:
+            v = NULL_AS[field]
+        if v is None:
+            return None
+        n = pd.to_numeric(v, errors="coerce")
+        return float(n) if pd.notna(n) and not FIELDS[field][0] else code(v)
+    return norm(a) == norm(b)
 
-    Carry: same work order, sequence, operation and the same differences
-    (DIFF_KEY). History: every line ever decided, newest judgement first -
-    except lines of work orders now known to have a stale USER_8: those were
-    judged against the wrong revision, so they are no experience at all.
-    Suggestion: an open line whose operation and differences were judged
-    before on any order. A suggestion never fills VERDICT. Returns (stats, history).
+
+def fates_since_last(prev, d, lst, stale_wos):
+    """What happened to each line of the previous list that is not listed again unchanged.
+
+    FATE, in this order:
+      moved by USER_8 rule           its work order is now on 05_StaleUser8
+      started or closed              no longer an open, not-started operation -
+                                     produced (or closing) on the values it had
+      still listed, changed          listed again, with other differences
+      fixed - order updated          the order now carries the old master value
+      fixed - master updated         the master now carries the order's old value
+      fixed - both changed           order and master agree on a third value
+      fixed - now matches            no longer differs (a line without master line
+                                     or compared with today's master before)
     """
-    stats = {"file": "none found", "previous_decided": 0, "carried": 0, "previous_unknown": [],
-             "previous_decided_gone": 0, "suggested": 0, "conflicts": 0, "history_stale_dropped": 0}
-    history = pd.DataFrame(columns=HISTORY_COLUMNS)
-    if path is None:
-        return stats, history
-    stats["file"] = f"{path.name} ({datetime.fromtimestamp(path.stat().st_mtime):%Y-%m-%d %H:%M})"
-    prev, hist = read_previous(path)
-    state = prev.VERDICT.map(verdict_state)
-    stats["previous_decided"] = int((state == "decided").sum())
-    stats["previous_unknown"] = sorted({(code(v) or "").strip() for v in prev.VERDICT[state == "unknown"]})
-    stats["conflicts"] = int(prev._CONFLICT.fillna(False).astype(bool).sum())
-
-    judged = prev[state == "decided"].assign(VERDICT=lambda x: x.VERDICT.map(lambda v: code(v).strip()),
-                                             JUDGED_IN=path.name)
-    history = pd.concat([judged.reindex(columns=HISTORY_COLUMNS), hist.reindex(columns=HISTORY_COLUMNS)],
-                        ignore_index=True)
-    history = history[history.VERDICT.map(verdict_state) == "decided"]
-    history = history[~pd.Series(line_key(history), index=history.index).duplicated()].reset_index(drop=True)
-    on_stale = history.WORK_ORDER.map(code).isin({code(w) for w in stale_wos})
-    stats["history_stale_dropped"] = int(on_stale.sum())
-    history = history[~on_stale].reset_index(drop=True)
-    history["LABEL"] = history.DIFF_KEY.map(label_of_key)
-
-    by_key = {k: (v, n) for k, v, n in zip(line_key(prev), prev.VERDICT, prev.NOTE.fillna(""))}
-    for i, k in zip(lines.index, line_key(lines)):
-        if k not in by_key:
+    cols = ["FATE", "WORK_ORDER", "STEP", "OPERATION", "SCENARIO_BEFORE", "DIFFERENCES_BEFORE", "NOW", "NOTE_BEFORE"]
+    if prev is None or prev.empty:
+        return pd.DataFrame(columns=cols)
+    current = set(line_key(lst, "STEP"))
+    listed_now = {(code(w), seq_key(s)) for w, s in zip(lst.WORK_ORDER, lst.STEP)}
+    by_line = {}
+    for i, w, s in zip(d.index, d.WORK_ORDER.map(code), d.OPERATION_SEQUENCE.map(seq_key)):
+        by_line.setdefault((w, s), i)
+    stale = {code(w) for w in stale_wos}
+    rows = []
+    for (w, s, op, dk), note, scen in zip(line_key(prev, "SEQ"), prev.NOTE, prev.SCENARIO):
+        if (w, s, op, dk) in current:
             continue
-        v, note = by_key[k]
-        st, note = verdict_state(v), code(note) or ""
-        if st == "decided":
-            lines.at[i, "VERDICT"] = code(v).strip()
-            lines.at[i, "VERDICT_FROM"] = path.name
-            stats["carried"] += 1
-        elif st == "unknown":
-            # free text in VERDICT: keep it, visibly, so nothing written is lost
-            note = f"previous VERDICT text: {code(v).strip()}" + (f" | {note}" if note else "")
-        lines.at[i, "NOTE"] = note
-    current = set(line_key(lines))
-    stats["previous_decided_gone"] = sum(1 for k, s in zip(line_key(prev), state) if s == "decided" and k not in current)
-
-    by_diff = {}
-    for op, dk, v, n in zip(history.OPERATION.map(code), history.DIFF_KEY.map(code), history.VERDICT,
-                            history.NOTE.fillna("")):
-        by_diff.setdefault((op, dk), []).append((v, code(n) or ""))
-    for i, op, dk in zip(lines.index, lines.OPERATION.map(code), lines.DIFF_KEY.map(code)):
-        if lines.at[i, "VERDICT"] in VERDICTS or (op, dk) not in by_diff:
-            continue
-        seen = by_diff[(op, dk)]
-        counts = pd.Series([v for v, _ in seen]).value_counts()
-        lines.at[i, "SUGGESTED_VERDICT"] = (counts.index[0] if len(counts) == 1 else
-                                            "MIXED: " + ", ".join(f"{v} x{n}" for v, n in counts.items()))
-        example = next((n for _, n in seen if n), "")
-        lines.at[i, "SUGGESTION_BASIS"] = (f"same difference judged {len(seen)}x before"
-                                           + (f"; note: {example}" if example else ""))
-        stats["suggested"] += 1
-    return stats, history
+        before = parse_diff_key(dk)
+        now = ""
+        if w in stale:
+            fate = "moved by USER_8 rule"
+        elif (w, s) not in by_line:
+            fate = "started or closed"
+        elif (w, s) in listed_now:
+            fate = "still listed, changed"
+        else:
+            r = d.loc[by_line[(w, s)]]
+            now = describe({f: (shown(r[f"WO_{f}"]), shown(r[f"M_{f}"])) for f in before})
+            own_compare = before and not str(scen).startswith("Differs from today")
+            if not own_compare:
+                fate = "fixed - now matches"
+            elif all(same_value(r[f"WO_{f}"], om, f) for f, (_, om) in before.items()):
+                fate = "fixed - order updated"
+            elif all(same_value(r[f"M_{f}"], oo, f) for f, (oo, _) in before.items()):
+                fate = "fixed - master updated"
+            else:
+                fate = "fixed - both changed"
+        rows.append({"FATE": fate, "WORK_ORDER": w, "STEP": s, "OPERATION": op, "SCENARIO_BEFORE": scen,
+                     "DIFFERENCES_BEFORE": describe(before), "NOW": now, "NOTE_BEFORE": code(note) or ""})
+    return pd.DataFrame(rows, columns=cols).sort_values(["FATE", "WORK_ORDER", "STEP"]).reset_index(drop=True)
 
 
 def main():
@@ -551,8 +581,8 @@ def main():
     ap.add_argument("--drift", type=Path, default=PRIVATE_DIR / "data" / "drift.xlsx")
     ap.add_argument("--masters", type=Path, default=PRIVATE_DIR / "data" / "masters.xlsx")
     ap.add_argument("--out", type=Path, help="default: <repo>_private\\outputs\\master_drift_list_<today>.xlsx")
-    ap.add_argument("--verdicts", type=Path,
-                    help="list to carry verdicts from (default: the most recently saved one in outputs)")
+    ap.add_argument("--previous", type=Path,
+                    help="list to compare with and carry notes from (default: the most recently saved one in outputs)")
     a = ap.parse_args()
 
     for p in (a.drift, a.masters):
@@ -564,9 +594,9 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     drift_day = datetime.fromtimestamp(a.drift.stat().st_mtime).date()
     masters_day = datetime.fromtimestamp(a.masters.stat().st_mtime).date()
-    if a.verdicts and not a.verdicts.exists():
-        sys.exit(f"verdicts file not found: {a.verdicts}")
-    verdict_src = a.verdicts or find_previous(PRIVATE_DIR / "outputs", out)
+    if a.previous and not a.previous.exists():
+        sys.exit(f"previous list not found: {a.previous}")
+    prev_path = a.previous or find_previous(PRIVATE_DIR / "outputs")
 
     d = normalise_drift(load(a.drift, DRIFT_COLUMNS))
     m = normalise_masters(load(a.masters, MASTER_COLUMNS))
@@ -580,24 +610,16 @@ def main():
         sys.exit(f"level 1 flags disagree with the recomputation: {flag_problems}")
     d, stale = apply_stale_user8(d, m)
 
-    flags = [f"D_{s}" for _, s in FIELDS.values()]
-    matched = d[d.NO_MASTER_LINE == 0]
-    l1 = matched[matched[flags].fillna(0).max(axis=1) == 1]
-    nomaster = d[d.NO_MASTER_LINE == 1].assign(
-        HINT=lambda x: x.OPERATION.str.startswith("S RIL").map({True: "rework step (S RIL ...)", False: ""}))
     l3 = level3(d, m)
     l2 = level2(d, l3)
-    lines = build_lists(l1, l3)
-    if len(lines) != len(l1) or lines.duplicated(["WORK_ORDER", "SEQ"]).any():
-        sys.exit(f"the lists do not hold each level 1 line exactly once: {len(lines)} rows for {len(l1)} lines")
-    vs, history = carry_verdicts(lines, verdict_src,
-                                 stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else [])
-    # this run's decided lines are all carried, hence already in the history;
-    # added anyway so the history stays complete if that ever changes
-    now = lines[lines.VERDICT.isin(VERDICTS)].assign(
-        JUDGED_IN=lambda x: x.VERDICT_FROM.where(x.VERDICT_FROM != "", out.name))
-    history = pd.concat([history, now.reindex(columns=HISTORY_COLUMNS)], ignore_index=True)
-    history = history[~pd.Series(line_key(history), index=history.index).duplicated()].reset_index(drop=True)
+    lst, matching = build_list(d, l3)
+    if len(lst) + matching != len(d) or lst.duplicated(["WORK_ORDER", "STEP"]).any():
+        sys.exit(f"the list does not account for every line once: {len(lst)} listed + {matching} matching "
+                 f"vs {len(d)} lines")
+    prev = read_previous(prev_path) if prev_path else None
+    notes_carried = carry_notes(lst, prev)
+    stale_wos = stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else []
+    fates = fates_since_last(prev, d, lst, stale_wos)
 
     not_extracted = int((l3.CATEGORY == "MASTERS_NOT_EXTRACTED").sum()) if not l3.empty else 0
     not_in_export = int((l3.CATEGORY == "OWN_LINE_NOT_IN_EXPORT").sum()) if not l3.empty else 0
@@ -605,47 +627,34 @@ def main():
         ("Run", f"{datetime.now():%Y-%m-%d %H:%M}"),
         ("Drift input", f"{a.drift.name} ({datetime.fromtimestamp(a.drift.stat().st_mtime):%Y-%m-%d %H:%M})"),
         ("Masters input", f"{a.masters.name} ({datetime.fromtimestamp(a.masters.stat().st_mtime):%Y-%m-%d %H:%M})"),
-        ("Open, not-started WO operations", len(d)),
-        ("Work orders", d[WO_KEY].drop_duplicates().shape[0]),
+        ("Previous list", f"{prev_path.name} ({datetime.fromtimestamp(prev_path.stat().st_mtime):%Y-%m-%d %H:%M})"
+         if prev_path else "none found"),
         ("Check: duplicate operation keys", dup),
         ("Check: level 1 flags recomputed", "all agree"),
-        ("Stale USER_8 - WOs moved to the current routing (08_StaleUser8)", len(stale)),
-        ("Lines differing from their master", len(lines)),
+        ("", ""),
+        ("Open, not-started WO operations", len(d)),
+        ("Work orders", d[WO_KEY].drop_duplicates().shape[0]),
+        ("Lines matching their master (not listed)", matching),
+        (f"Lines listed ({LIST_SHEET})", f"{len(lst)} lines, {lst.WORK_ORDER.nunique()} work orders"),
     ]
-    for key, (sheet, name) in LISTS.items():
-        part = lines[lines._LIST == key]
-        summary.append((f"{sheet} - {name}", f"{len(part)} lines, {part.WORK_ORDER.nunique()} work orders"))
+    for key, name in SCENARIOS.items():
+        part = lst[lst.SCENARIO == name]
+        summary.append((f"Scenario - {name}", f"{len(part)} lines, {part.WORK_ORDER.nunique()} work orders"))
     summary.append(("", ""))
-    for lab, g in lines.groupby("LABEL"):
-        judged = history[history.LABEL == lab].VERDICT.value_counts()
-        summary.append((f"Label - {lab}",
-                        f"{len(g)} lines now ({', '.join(f'{LISTS[k][1]} {n}' for k, n in g._LIST.value_counts().items())})"
-                        f" | judged before: " + (", ".join(f"{v} x{n}" for v, n in judged.items()) or "never")))
-    for lab in sorted(set(history.LABEL) - set(lines.LABEL)):
-        judged = history[history.LABEL == lab].VERDICT.value_counts()
-        summary.append((f"Label - {lab}", "0 lines now | judged before: "
-                        + ", ".join(f"{v} x{n}" for v, n in judged.items())))
+    for lab, n in lst[lst.LABEL != ""].LABEL.value_counts().sort_index().items():
+        summary.append((f"Label - {lab}", int(n)))
+    summary.append(("", ""))
+    summary.append(("Notes carried from the previous list", notes_carried))
+    summary.append(("Since the previous list (02_SinceLastList) - lines not listed again unchanged", len(fates)))
+    summary += [(f"Since the previous list - {k}", int(n)) for k, n in fates.FATE.value_counts().sort_index().items()]
     summary += [
         ("", ""),
-        ("Verdicts carried from", vs["file"]),
-        ("Verdicts - decided there", vs["previous_decided"]),
-        ("Verdicts - carried to a current line", vs["carried"]),
-        ("Verdicts - decided before, line gone or changed", vs["previous_decided_gone"]),
-        ("Verdicts - open lines with a SUGGESTED_VERDICT", vs["suggested"]),
-        (f"Verdicts - history ({HISTORY_SHEET}), every line ever decided", len(history)),
-        ("Verdicts - dropped from history: judged on a stale-USER_8 comparison", vs["history_stale_dropped"]),
-    ]
-    summary += [(f"Verdicts - {v}", int((lines.VERDICT == v).sum())) for v in VERDICTS]
-    summary += [
-        ("", ""),
-        ("Lines with no own-revision master line (05_NoMasterLine)", len(nomaster)),
-        ("LEVEL 2 - work orders on an older revision (06_OldRevisionWOs)", len(l2)),
-        ("LEVEL 3 - older-revision lines (07_CrossRevision)", len(l3)),
+        ("Stale USER_8 - WOs moved to the current routing (05_StaleUser8)", len(stale)),
+        ("LEVEL 2 - work orders on an older revision (03_OldRevisionWOs)", len(l2)),
+        ("LEVEL 3 - older-revision lines (04_CrossRevision)", len(l3)),
     ]
     summary += [(f"LEVEL 3 - {k}", int(v)) for k, v in l3.CATEGORY.value_counts().items()] if not l3.empty else []
     summary += [
-        ("LEVEL 3 - compared lines differing from current revision",
-         int(l3.D3_ANY.fillna(0).sum()) if not l3.empty else 0),
         ("Check: level 3 parts missing from masters export", not_extracted),
         ("Check: matched own lines missing from masters export", not_in_export),
         ("LEVEL 3 NOTE", "INDICATIVE. Pairing assumes same name = same step. "
@@ -654,30 +663,28 @@ def main():
 
     with pd.ExcelWriter(out) as xw:
         pd.DataFrame(summary, columns=["ITEM", "VALUE"]).to_excel(xw, sheet_name="00_Summary", index=False)
-        for key, (sheet, _) in LISTS.items():
-            lines[lines._LIST == key][LIST_COLUMNS].to_excel(xw, sheet_name=sheet, index=False)
-        l1.to_excel(xw, sheet_name="04_Drift", index=False)
-        nomaster.to_excel(xw, sheet_name="05_NoMasterLine", index=False)
-        l2.to_excel(xw, sheet_name="06_OldRevisionWOs", index=False)
-        l3.to_excel(xw, sheet_name="07_CrossRevision", index=False)
-        stale.to_excel(xw, sheet_name="08_StaleUser8", index=False)
-        history.reindex(columns=HISTORY_COLUMNS).to_excel(xw, sheet_name=HISTORY_SHEET, index=False)
+        lst[LIST_COLUMNS].to_excel(xw, sheet_name=LIST_SHEET, index=False)
+        fates.to_excel(xw, sheet_name="02_SinceLastList", index=False)
+        l2.to_excel(xw, sheet_name="03_OldRevisionWOs", index=False)
+        l3.to_excel(xw, sheet_name="04_CrossRevision", index=False)
+        stale.to_excel(xw, sheet_name="05_StaleUser8", index=False)
         for ws in xw.sheets.values():
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
-        list_widths = {"A": 24, "B": 34, "C": 22, "D": 11, "E": 8, "F": 14, "G": 16, "H": 30, "I": 9, "J": 11,
-                       "K": 11, "L": 24, "M": 7, "N": 8, "O": 50, "P": 30, "Q": 20, "R": 22, "S": 50, "T": 40,
-                       "U": 24, "V": 30}
-        for sheet, widths in {
-            "00_Summary": {"A": 70, "B": 110},
-            **{s: list_widths for s, _ in LISTS.values()},
-            HISTORY_SHEET: {"A": 14, "B": 7, "C": 24, "D": 34, "E": 30, "F": 20, "G": 50, "H": 30},
-        }.items():
-            for col, w in widths.items():
-                xw.sheets[sheet].column_dimensions[col].width = w
+        xw.sheets["00_Summary"].column_dimensions["A"].width = 78
+        xw.sheets["00_Summary"].column_dimensions["B"].width = 60
+        ws = xw.sheets[LIST_SHEET]
+        ws.freeze_panes = "C2"   # SCENARIO and LABEL stay in view
+        widths = {"SCENARIO": 34, "LABEL": 30, "REVISION": 14, "FAMILY": 22, "PART_ID": 16, "PART_DESCRIPTION": 30,
+                  "WORK_ORDER": 14, "OPERATION": 24, "DIFFERENCES": 50, "NOTE": 40, "DIFF_KEY": 30}
+        for i, c in enumerate(LIST_COLUMNS):
+            ws.column_dimensions[ws.cell(1, i + 1).column_letter].width = widths.get(c, 12)
+        fs = xw.sheets["02_SinceLastList"]
+        for col, w in {"A": 26, "B": 14, "C": 7, "D": 24, "E": 34, "F": 50, "G": 50, "H": 40}.items():
+            fs.column_dimensions[col].width = w
 
     for k, v in summary:
-        print(f"{k:<66} {v}")
+        print(f"{k:<80} {v}")
     print(f"\nwritten: {out}")
     status = 0
     if drift_day != masters_day:
@@ -687,14 +694,6 @@ def main():
     if not_extracted or not_in_export:
         print("!! masters export does not cover every older-revision line - "
               "check both queries ran on the same day with the same scope")
-        status = 2
-    if vs["previous_unknown"]:
-        print(f"!! the previous list has VERDICT text that is not a keyword: {vs['previous_unknown']} - "
-              f"kept in NOTE, the line is open again. Keywords: {', '.join(VERDICTS)}")
-        status = 2
-    if vs["conflicts"]:
-        print(f"!! {vs['conflicts']} line(s) had different verdicts on their fields in the previous review - "
-              "left open, to decide once for the line")
         status = 2
     return status
 

@@ -60,6 +60,10 @@ SELECT
     O.SEQUENCE_NO               AS OPERATION_SEQUENCE,
     O.OPERATION_TYPE            AS OPERATION,
     O.STATUS                    AS OP_STATUS,
+    -- ADDED 2026-10-12: the work order operation's own ROWID, so a line of
+    -- the list can be found in the ERP directly. master_drift.py accepts
+    -- exports without it (blank column).
+    O.ROWID                     AS WORKORDER_OPS_ROWID,
 
     -- side by side: work order copy | master
     O.RESOURCE_ID               AS WO_RESOURCE_ID,
