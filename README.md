@@ -73,9 +73,31 @@ The list is written to
 `..\factory_work_order_master_drift_private\outputs\master_drift_list_<date>.xlsx`.
 `--drift`, `--masters` and `--out` override the paths.
 
-### Verdicts
+### The three lists
 
-In `05_Review`, `VERDICT` takes exactly one of these keywords:
+Every work-order line that differs from its master lands on exactly one
+list, one row per line. Its `LABEL` names exactly what differs - resource,
+rate (`RUN`), setup (`SETUP_HRS`), run type (`RUN_TYPE`), load size
+(`LOAD_SIZE_QTY`), crew (`USER_5`) - e.g. `same resource: rate + setup` or
+`different resource, nothing else`. `DIFFERENCES` spells out the values
+("rate: order 60 / master 50"). The rules, checked in this order, come from
+the first review (28 Sep 2026, 65 judged lines):
+
+| Order | Rule | List | Basis |
+|---|---|---|---|
+| 1 | Order already matches today's master (an older-revision line whose values equal the current master; the difference is only with its own old revision) | `03_Information` | nothing to change on the order |
+| 2 | Same resource, other values differ | `01_OrdersToUpdate` | 51 of 51 decided lines: the order follows the master |
+| 3 | Different resource | `02_ResourceCheck` | 9 of 13 were intentional, 4 were not - always looked at |
+
+`00_Summary` counts every label with the verdicts it has received so far,
+so a label that starts behaving differently stands out - and can then get
+its own rule.
+
+### Verdicts - for exceptions only
+
+`VERDICT` is empty by default. Fill it only where a line is an exception -
+an "update" line that should not be updated, a resource change confirmed or
+found wrong - with exactly one keyword:
 
 | `VERDICT` | Meaning | What follows |
 |---|---|---|
@@ -86,40 +108,38 @@ In `05_Review`, `VERDICT` takes exactly one of these keywords:
 | `MASTER_WRONG` | the order is right; the master is wrong today | correct the master |
 | `UNCLEAR` | asked, no clear answer yet | ask again |
 
-New rows come prefilled with all six, separated by ` / `: delete down to
-one. A cell still containing ` / ` counts as undecided. Anything else goes
-in `NOTE` (who said it, when).
+Anything else goes in `NOTE` (who said it, when). Save the list where it
+is. The next run reads the most recently saved list in the `outputs` folder
+(or `--verdicts <file>`) and carries each verdict and note forward to the
+same work order, sequence, operation and the same differences;
+`VERDICT_FROM` says where it came from. When a difference changes, the line
+is open again.
 
-Save the reviewed list where it is. The next run reads the most recently
-saved review in the `outputs` folder (or `--verdicts <file>`) and carries
-each verdict and note forward to the same work order, sequence, operation,
-field and the same two values; `VERDICT_FROM` says where it came from. When
-a difference changes, it comes back open, to be judged again.
+Every verdict ever given is kept on `09_VerdictHistory` and passed on from
+list to list, also after its line has gone (verdicts given on orders later
+found to have an out-of-date `USER_8` are dropped: they were judged against
+the wrong revision). When an open line shows a difference already judged on
+another order - same operation and same differences - `SUGGESTED_VERDICT`
+proposes the earlier verdict (or `MIXED: ...`) and `SUGGESTION_BASIS` says
+how often and with which note. It is only a suggestion.
 
-Every verdict ever given is kept on `08_VerdictHistory` and passed on from
-list to list, also after its line has gone. When an open row shows a
-difference already judged on another order - same operation, field and both
-values - `SUGGESTED_VERDICT` proposes the earlier verdict (or `MIXED: ...`
-when it was judged differently) and `SUGGESTION_BASIS` says how often and
-with which note. It is only a suggestion: `VERDICT` stays open until you
-choose.
+Lists and reviews made before 12 Oct 2026 had one row per field; they are
+still read, their verdicts combined per line.
 
 ### Output sheets
 
 | Sheet | Content |
 |---|---|
-| `00_Summary` | counts, checks, input files, verdicts carried |
-| `01_Drift` | level 1: lines differing from their master (their own revision's, or the current one for an order moved by the `USER_8` rule) |
-| `02_NoMasterLine` | WO lines with no own-revision master line (steps added to the order, e.g. rework `S RIL ...`) |
-| `03_OldRevisionWOs` | level 2, one row per work order, with its level 1 and level 3 counts |
-| `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current master's values |
-| `05_Review` | **start here.** Level 1, one row per work order × part × differing field, with its `PATTERN` number, `VERDICT` / `NOTE` (carried from the last review where nothing changed) - the one place to fill them in. For an older-revision order `CUR_MASTER_VALUE` shows today's master value, and `HINT` says when the order already matches it. Filter by pattern, write the verdict once, fill down; change single rows for exceptions |
-| `06_ReviewPatterns` | the same differences grouped into numbered patterns - family, project, operation, field, work-order value, master value - with the orders, parts and verdicts behind each. Overview only |
-| `07_StaleUser8` | orders moved onto the current routing because `USER_8` is out of date, with what they showed before |
-| `08_VerdictHistory` | every line ever given a verdict, with its note and the list it was judged in - the memory behind the suggestions |
-
-Columns: `WO_*` is the work order's value, `M_*` the own-revision master's,
-`CUR_*` the current master's; `D_*` / `D3_*` are 1 where they differ.
+| `00_Summary` | counts, checks, input files, one line per label with its verdicts so far |
+| `01_OrdersToUpdate` | **for planners:** same resource, other values differ - bring the order to the master |
+| `02_ResourceCheck` | the resource differs - check whether intentional |
+| `03_Information` | order already matches today's master - nothing to do |
+| `04_Drift` | level 1 detail: every differing line with all values (`WO_*` order, `M_*` master, `D_*` = 1 where they differ) |
+| `05_NoMasterLine` | WO lines with no own-revision master line (steps added to the order, e.g. rework `S RIL ...`) |
+| `06_OldRevisionWOs` | level 2, one row per work order, with its level 1 and level 3 counts |
+| `07_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current master's values (`CUR_*`, `D3_*`) |
+| `08_StaleUser8` | orders moved onto the current routing because `USER_8` is out of date, with what they showed before |
+| `09_VerdictHistory` | every line ever given a verdict, with its note and the list it was judged in - the memory behind the suggestions and the label counts |
 
 ### Exit codes and checks
 
@@ -127,7 +147,7 @@ Columns: `WO_*` is the work order's value, `M_*` the own-revision master's,
 |---|---|
 | 0 | clean |
 | 1 | stopped: an input is missing, an operation appears twice (a join fanned out), or the level 1 flags from the SQL disagree with the script's own recomputation |
-| 2 | the list was written, but something needs a look - explained on a `!!` line: the two exports come from different days, the masters export does not cover every older-revision line, or the previous review has `VERDICT` text that is not one of the keywords (it is kept in `NOTE` and the row is open again) |
+| 2 | the list was written, but something needs a look - explained on a `!!` line: the two exports come from different days, the masters export does not cover every older-revision line, the previous list has `VERDICT` text that is not one of the keywords (it is kept in `NOTE` and the line is open again), or an old one-row-per-field review gave one line different verdicts on its fields (the line is left open, to decide once) |
 
 The script refuses to write inside this repository.
 
