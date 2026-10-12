@@ -73,9 +73,9 @@ The list is written to
 `..\factory_work_order_master_drift_private\outputs\master_drift_list_<date>.xlsx`.
 `--drift`, `--masters`, `--out` and `--previous` override the paths.
 
-### The drift list
+### The SQL updater list
 
-`01_DriftList` holds one row per open, not-started line that does **not**
+`01_SqlUpdater` holds one row per open, not-started line that does **not**
 simply match its master (lines that match are only counted). Each row has
 exactly one `SCENARIO`, decided in this order:
 
@@ -87,36 +87,55 @@ exactly one `SCENARIO`, decided in this order:
 | `Order to update` | same resource, another value differs | 28 Sep review: 51 of 51 - the order follows the master |
 | `Differs from today's master (older revision, indicative)` | matches its own old revision, but the current master has a different value | level 3 pairing - indicative |
 
-`LABEL` names exactly what differs - resource, rate (`RUN`), setup
-(`SETUP_HRS`), run type (`RUN_TYPE`), load size (`LOAD_SIZE_QTY`), crew
-(`USER_5`) - e.g. `same resource: rate + setup` or `different resource,
-nothing else`; for the last scenario it describes the difference with
-today's master. `REVISION` describes the order: `current`, `older`, or
-`older - USER_8 out of date`.
+Columns, in order:
 
-Columns, in order: `SCENARIO`, `LABEL`, `REVISION`, `WORKORDER_OPS_ROWID`
-(the order's operation line), `MASTER_OPS_ROWID` (the master line it is
-compared with), `CUR_MASTER_OPS_ROWID` (today's master line, older
-revisions), `FAMILY`, `PART_ID`, `PART_DESCRIPTION`, `PROJECT_CODE`,
-`WO_KIND`, `WORK_ORDER`, `WO_STATUS`, `CREATE_DATE`, `DESIRED_RLS_DATE`,
-`WO_REV`, `CURRENT_REV`, `OPERATION`, `STEP` (sequence number), then for
-each compared field the order's value (`WO_*`), its master's (`M_*`) and
-today's master's (`CUR_*`), `DIFFERENCES` in words, `NOTE`, and `DIFF_KEY`
-(the differences in machine-readable form, used to recognise the line next
-time).
+| Columns | Content |
+|---|---|
+| `WO_OPS_ROWID`, `M_OPS_ROWID`, `C_MASTER_OPS_ROWID` | the order's operation line, the master line it is compared with, today's master line |
+| `FAMILY`, `PART_ID`, `PART_DESCRIPTION` | which part |
+| `WO`, `WO_STATUS`, `WO_CREATE_DATE`, `WO_DESIRED_RLS_DATE` | which order |
+| `OPERATION`, `STEP` | which step (`STEP` = sequence number) |
+| `WO_REV`, `M_REV`, `C_REV` | the order's revision (`USER_8`), the one it is compared with, today's |
+| `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its master's and today's master's values side by side |
+| `DIFFERENCES`, `DIFF_KEY` | what differs, in words and in machine-readable form (used to recognise the line next time) |
+| `SCENARIO` | see above |
+| `SQL_UPDATE` | the statement for the order - see below |
+| `LABEL` | exactly what differs: resource, rate, setup, run type, load size, crew |
+| `NOTE` | free text, carried to the same line next time |
 
-`NOTE` is free text. Save the list where it is: the next run reads the most
-recently saved list in the `outputs` folder (or `--previous <file>`) and
-carries each note to the same work order, step, operation and the same
-differences. Lists made before 12 Oct 2026 had verdict columns; their
-verdicts arrive in `NOTE` as `earlier verdict: ...`.
+`M_` is the master the line was compared with: its own revision, or today's
+for an order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an
+order on the current revision `C_` = `M_`.
+
+**`SQL_UPDATE`** is written only on `Order to update` lines:
+
+```
+UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
+```
+
+- it sets only the fields that differ, to the `M_` value - never the resource;
+- it is a **spreadsheet formula**, not text: it reads the `M_` cells and
+  `WO_OPS_ROWID` of its own row, so correcting a value in the sheet corrects
+  the statement; the column letters are derived from the column order;
+- it is left **empty** when a master value or `WO_OPS_ROWID` is blank, so
+  nothing can blank a field by accident;
+- the other scenarios get no statement: a resource change needs a person,
+  today's master is only paired indicatively, and the rest has nothing to
+  copy. Nothing here runs anything - it produces the SQL and leaves running
+  it to a person who has read it.
+
+Save the list where it is: the next run reads the most recently saved list
+in the `outputs` folder (or `--previous <file>`), carries each `NOTE` to the
+same order, step, operation and differences, and fills `02_SinceLastList`.
+Lists made before 12 Oct 2026 had verdict columns; their verdicts arrive in
+`NOTE` as `earlier verdict: ...`.
 
 ### Output sheets
 
 | Sheet | Content |
 |---|---|
 | `00_Summary` | counts per scenario and per label, checks, input files, what happened since the previous list |
-| `01_DriftList` | **the list** - see above |
+| `01_SqlUpdater` | **the list**, with the update statements - see above |
 | `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed** (order updated / master updated / both changed / now matches), **started or closed** (produced on the values it had), still listed but changed, or moved by the `USER_8` rule. Shows whether the list is acted on |
 | `03_OldRevisionWOs` | level 2, one row per work order on an older revision, with its level 1 and level 3 counts |
 | `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current master's values (`CUR_*`, `D3_*`) |

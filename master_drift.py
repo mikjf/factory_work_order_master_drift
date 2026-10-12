@@ -15,10 +15,12 @@ two files were saved on different days.
 Output: <repo>_private\\outputs\\master_drift_list_<date>.xlsx by default,
 never inside this repo - it names real parts and orders:
   00_Summary          counts per scenario and label, checks, since last list
-  01_DriftList        THE list: one row per line that does not match its
-                      master, with SCENARIO, LABEL, REVISION, the ROWIDs, the
-                      order's / master's / today's master's values, NOTE -
-                      see THE DRIFT LIST below
+  01_SqlUpdater       THE list: one row per line that does not match its
+                      master - the ROWIDs, part, order, step, revisions, the
+                      order's (WO_) / master's (M_) / today's master's (C_)
+                      values, SCENARIO, SQL_UPDATE (an UPDATE on the order's
+                      operation, "Order to update" lines only), LABEL, NOTE -
+                      see THE DRIFT LIST and THE SQL UPDATER below
   02_SinceLastList    what happened to each line of the previous list that is
                       not listed again unchanged: fixed (order / master
                       updated) or started on the old values - see
@@ -320,8 +322,23 @@ def level2(d, l3):
 # Lines that match their master are counted, not listed. LABEL names exactly
 # what differs - resource, rate, setup, run type, load size, crew; for the
 # last scenario it describes the difference with today's master.
-# REVISION describes the ORDER: current / older / older - USER_8 out of date.
 # NOTE is free text and is carried to the same line next time.
+#
+# THE SQL UPDATER (user, 2026-10-12). The list is laid out as the user asked,
+# FTS-updater style: per line the order's (WO_), its master's (M_) and today's
+# master's (C_) values side by side, and SQL_UPDATE - a spreadsheet FORMULA
+# that builds an UPDATE on the work-order operation (WO_OPS_ROWID) from the M_
+# cells of its own row, so correcting a value corrects the statement.
+#   - only on "Order to update": the other scenarios need a person (resource),
+#     are indicative (today's master), or have nothing to copy;
+#   - the value is M_, the master the line was compared with (exact pairing by
+#     sequence + name), never C_ on an older revision (indicative pairing);
+#   - it sets only the fields that differ; never RESOURCE_ID (an "Order to
+#     update" line has the same resource by definition);
+#   - empty when a master value or the ROWID is blank, so nothing can blank a
+#     field by accident. Nothing here runs anything.
+# M_REV is the revision the line was compared with (= C_REV for an order moved
+# by the stale-USER_8 rule). For orders on the current revision C_ = M_.
 # ---------------------------------------------------------------------------
 
 NAMES = {"RUN": "rate", "SETUP_HRS": "setup", "RUN_TYPE": "run type", "LOAD_SIZE_QTY": "load size",
@@ -333,16 +350,26 @@ SCENARIOS = {  # key -> shown name; dict order = sort order of the list
     "info": "Order already matches today's master",
     "nomaster": "No master line",
 }
-LIST_SHEET = "01_DriftList"
+LIST_SHEET = "01_SqlUpdater"
 # older workbooks still read for NOTE carry and 02_SinceLastList
+OLD_DRIFT_LIST_SHEET = "01_DriftList"                                           # 2026-10-12, before the updater
 OLD_LIST_SHEETS = ("01_OrdersToUpdate", "02_ResourceCheck", "03_Information")   # 2026-10-12 afternoon
 OLD_REVIEW_SHEETS = ("05_Review", "Lines")                                      # one row per field
-VALUE_COLUMNS = [f"{p}_{f}" for f in FIELDS for p in ("WO", "M", "CUR")]
+# compared field -> its short name in the list's column headers (user, 2026-10-12)
+SHORT = {"RESOURCE_ID": "RES_ID", "RUN_TYPE": "RUN_TYPE", "RUN": "RUN", "LOAD_SIZE_QTY": "LSQ",
+         "SETUP_HRS": "SETUP_HRS", "USER_5": "CREW"}
+# the user's column order: resource, then rate and run type paired per source
+# (rate first - user, 2026-10-12), then load size, setup and crew
+VALUE_COLUMNS = (
+    ["WO_RES_ID", "M_RES_ID", "C_RES_ID",
+     "WO_RUN", "WO_RUN_TYPE", "M_RUN", "M_RUN_TYPE", "C_RUN", "C_RUN_TYPE"]
+    + [f"{p}_{s}" for s in ("LSQ", "SETUP_HRS", "CREW") for p in ("WO", "M", "C")])
 LIST_COLUMNS = (
-    ["SCENARIO", "LABEL", "REVISION", "WORKORDER_OPS_ROWID", "MASTER_OPS_ROWID", "CUR_MASTER_OPS_ROWID",
-     "FAMILY", "PART_ID", "PART_DESCRIPTION", "PROJECT_CODE", "WO_KIND", "WORK_ORDER", "WO_STATUS",
-     "CREATE_DATE", "DESIRED_RLS_DATE", "WO_REV", "CURRENT_REV", "OPERATION", "STEP"]
-    + VALUE_COLUMNS + ["DIFFERENCES", "NOTE", "DIFF_KEY"])
+    ["WO_OPS_ROWID", "M_OPS_ROWID", "C_MASTER_OPS_ROWID", "FAMILY", "PART_ID", "PART_DESCRIPTION",
+     "WO", "WO_STATUS", "WO_CREATE_DATE", "WO_DESIRED_RLS_DATE", "OPERATION", "STEP",
+     "WO_REV", "M_REV", "C_REV"]
+    + VALUE_COLUMNS
+    + ["DIFFERENCES", "DIFF_KEY", "SCENARIO", "SQL_UPDATE", "LABEL", "NOTE"])
 
 
 def seq_key(v):
@@ -403,33 +430,63 @@ def build_list(d, l3):
         else:
             matching += 1
             continue
+        # today's master: the line itself for an order on (or moved onto) the
+        # current routing, the level 3 pairing for an older revision
+        on_current = r.ON_CURRENT_ROUTING == 1
+        no_line = r.NO_MASTER_LINE == 1
         rec = {
-            "_S": list(SCENARIOS).index(key), "SCENARIO": SCENARIOS[key],
-            "LABEL": "no master line" if key == "nomaster" else label_of(pairs),
-            "REVISION": ("current" if r.ON_CURRENT_REV == 1 else
-                         "older - USER_8 out of date" if r.USER_8_STALE == 1 else "older"),
-            "WORKORDER_OPS_ROWID": r.WORKORDER_OPS_ROWID, "MASTER_OPS_ROWID": r.MASTER_OPS_ROWID,
-            "CUR_MASTER_OPS_ROWID": l3.at[idx, "CUR_MASTER_OPS_ROWID"] if compared else pd.NA,
+            "_S": list(SCENARIOS).index(key), "_DIFF": list(pairs),
+            "WO_OPS_ROWID": r.WORKORDER_OPS_ROWID,
+            "M_OPS_ROWID": pd.NA if no_line else r.MASTER_OPS_ROWID,
+            "C_MASTER_OPS_ROWID": (pd.NA if no_line else r.MASTER_OPS_ROWID) if on_current else
+                                  (l3.at[idx, "CUR_MASTER_OPS_ROWID"] if compared else pd.NA),
             "FAMILY": r.FAMILY, "PART_ID": r.PART_ID, "PART_DESCRIPTION": r.PART_DESCRIPTION,
-            "PROJECT_CODE": r.PROJECT_CODE, "WO_KIND": r.WO_KIND, "WORK_ORDER": r.WORK_ORDER,
-            "WO_STATUS": r.WO_STATUS, "CREATE_DATE": pd.to_datetime(r.CREATE_DATE).date(),
-            "DESIRED_RLS_DATE": pd.to_datetime(r.DESIRED_RLS_DATE).date(),
-            "WO_REV": r.WO_REV, "CURRENT_REV": r.CURRENT_REV, "OPERATION": r.OPERATION,
-            "STEP": r.OPERATION_SEQUENCE,
+            "WO": r.WORK_ORDER, "WO_STATUS": r.WO_STATUS,
+            "WO_CREATE_DATE": pd.to_datetime(r.CREATE_DATE).date(),
+            "WO_DESIRED_RLS_DATE": pd.to_datetime(r.DESIRED_RLS_DATE).date(),
+            "OPERATION": r.OPERATION, "STEP": r.OPERATION_SEQUENCE,
+            "WO_REV": r.WO_REV, "M_REV": r.CURRENT_REV if r.USER_8_STALE == 1 else r.WO_REV,
+            "C_REV": r.CURRENT_REV,
             "DIFFERENCES": describe(pairs, "today's master" if key == "today" else "master"),
-            "NOTE": "", "DIFF_KEY": make_diff_key(pairs),
+            "DIFF_KEY": make_diff_key(pairs), "SCENARIO": SCENARIOS[key], "SQL_UPDATE": "",
+            "LABEL": "no master line" if key == "nomaster" else label_of(pairs), "NOTE": "",
         }
-        for f in FIELDS:
-            rec[f"WO_{f}"] = getattr(r, f"WO_{f}")
-            rec[f"M_{f}"] = getattr(r, f"M_{f}")
-            rec[f"CUR_{f}"] = l3.at[idx, f"CUR_{f}"] if compared else pd.NA
+        for f, s in SHORT.items():
+            rec[f"WO_{s}"] = getattr(r, f"WO_{f}")
+            rec[f"M_{s}"] = pd.NA if no_line else getattr(r, f"M_{f}")
+            rec[f"C_{s}"] = (rec[f"M_{s}"] if on_current else
+                             l3.at[idx, f"CUR_{f}"] if compared else pd.NA)
         rows.append(rec)
-    x = pd.DataFrame(rows, columns=["_S"] + LIST_COLUMNS)
-    return x.sort_values(["_S", "LABEL", "OPERATION", "WORK_ORDER", "STEP"]).reset_index(drop=True), matching
+    x = pd.DataFrame(rows, columns=["_S", "_DIFF"] + LIST_COLUMNS)
+    return x.sort_values(["_S", "LABEL", "OPERATION", "WO", "STEP"]).reset_index(drop=True), matching
 
 
-def line_key(df, seq_col):
-    return list(zip(df.WORK_ORDER.map(code), df[seq_col].map(seq_key), df.OPERATION.map(code),
+def add_sql_update(lst):
+    """SQL_UPDATE on every 'Order to update' line, as a live spreadsheet formula.
+
+    Uses the row's position in the written sheet (header = row 1), so lst
+    must be in its final order and column order. See THE SQL UPDATER above.
+    Returns the number of statements written and of update lines left empty.
+    """
+    from openpyxl.utils import get_column_letter
+    col = {c: get_column_letter(i + 1) for i, c in enumerate(LIST_COLUMNS)}
+    written = blank = 0
+    for n, (i, r) in enumerate(lst.iterrows(), start=2):
+        if r.SCENARIO != SCENARIOS["update"]:
+            continue
+        fields = [f for f in r._DIFF if f != "RESOURCE_ID"]
+        if (pd.isna(r.WO_OPS_ROWID) or not fields
+                or any(pd.isna(r[f"M_{SHORT[f]}"]) or code(r[f"M_{SHORT[f]}"]) is None for f in fields)):
+            blank += 1
+            continue
+        sets = ", ".join(f"{f} = '\"&{col['M_' + SHORT[f]]}{n}&\"'" for f in fields)
+        lst.at[i, "SQL_UPDATE"] = f'="UPDATE OPERATION SET {sets} WHERE ROWID = "&{col["WO_OPS_ROWID"]}{n}&";"'
+        written += 1
+    return written, blank
+
+
+def line_key(df, seq_col, wo_col="WORK_ORDER"):
+    return list(zip(df[wo_col].map(code), df[seq_col].map(seq_key), df.OPERATION.map(code),
                     df.DIFF_KEY.map(lambda v: code(v) or "")))
 
 
@@ -464,7 +521,9 @@ def read_previous(path):
     """The previous list as WORK_ORDER / SEQ / OPERATION / DIFF_KEY / NOTE / SCENARIO, any of our formats."""
     sheets = pd.ExcelFile(path).sheet_names
     if LIST_SHEET in sheets:
-        p = pd.read_excel(path, sheet_name=LIST_SHEET, dtype=str).rename(columns={"STEP": "SEQ"})
+        p = pd.read_excel(path, sheet_name=LIST_SHEET, dtype=str).rename(columns={"WO": "WORK_ORDER", "STEP": "SEQ"})
+    elif OLD_DRIFT_LIST_SHEET in sheets:
+        p = pd.read_excel(path, sheet_name=OLD_DRIFT_LIST_SHEET, dtype=str).rename(columns={"STEP": "SEQ"})
     elif any(s in sheets for s in OLD_LIST_SHEETS):
         p = pd.concat([pd.read_excel(path, sheet_name=s, dtype=str) for s in OLD_LIST_SHEETS if s in sheets],
                       ignore_index=True)
@@ -486,7 +545,7 @@ def find_previous(folder):
     the list of the first, and must still read it (it is read before the
     new list is written).
     """
-    wanted = {LIST_SHEET, *OLD_LIST_SHEETS, *OLD_REVIEW_SHEETS}
+    wanted = {LIST_SHEET, OLD_DRIFT_LIST_SHEET, *OLD_LIST_SHEETS, *OLD_REVIEW_SHEETS}
     files = [p for p in folder.glob("*.xlsx") if not p.name.startswith("~$")]
     for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True):
         try:
@@ -503,7 +562,7 @@ def carry_notes(lst, prev):
         return 0
     notes = {k: n for k, n in zip(line_key(prev, "SEQ"), prev.NOTE) if code(n)}
     carried = 0
-    for i, k in zip(lst.index, line_key(lst, "STEP")):
+    for i, k in zip(lst.index, line_key(lst, "STEP", "WO")):
         if k in notes:
             lst.at[i, "NOTE"] = notes[k]
             carried += 1
@@ -538,11 +597,11 @@ def fates_since_last(prev, d, lst, stale_wos):
       fixed - now matches            no longer differs (a line without master line
                                      or compared with today's master before)
     """
-    cols = ["FATE", "WORK_ORDER", "STEP", "OPERATION", "SCENARIO_BEFORE", "DIFFERENCES_BEFORE", "NOW", "NOTE_BEFORE"]
+    cols = ["FATE", "WO", "STEP", "OPERATION", "SCENARIO_BEFORE", "DIFFERENCES_BEFORE", "NOW", "NOTE_BEFORE"]
     if prev is None or prev.empty:
         return pd.DataFrame(columns=cols)
-    current = set(line_key(lst, "STEP"))
-    listed_now = {(code(w), seq_key(s)) for w, s in zip(lst.WORK_ORDER, lst.STEP)}
+    current = set(line_key(lst, "STEP", "WO"))
+    listed_now = {(code(w), seq_key(s)) for w, s in zip(lst.WO, lst.STEP)}
     by_line = {}
     for i, w, s in zip(d.index, d.WORK_ORDER.map(code), d.OPERATION_SEQUENCE.map(seq_key)):
         by_line.setdefault((w, s), i)
@@ -571,9 +630,9 @@ def fates_since_last(prev, d, lst, stale_wos):
                 fate = "fixed - master updated"
             else:
                 fate = "fixed - both changed"
-        rows.append({"FATE": fate, "WORK_ORDER": w, "STEP": s, "OPERATION": op, "SCENARIO_BEFORE": scen,
+        rows.append({"FATE": fate, "WO": w, "STEP": s, "OPERATION": op, "SCENARIO_BEFORE": scen,
                      "DIFFERENCES_BEFORE": describe(before), "NOW": now, "NOTE_BEFORE": code(note) or ""})
-    return pd.DataFrame(rows, columns=cols).sort_values(["FATE", "WORK_ORDER", "STEP"]).reset_index(drop=True)
+    return pd.DataFrame(rows, columns=cols).sort_values(["FATE", "WO", "STEP"]).reset_index(drop=True)
 
 
 def main():
@@ -613,13 +672,14 @@ def main():
     l3 = level3(d, m)
     l2 = level2(d, l3)
     lst, matching = build_list(d, l3)
-    if len(lst) + matching != len(d) or lst.duplicated(["WORK_ORDER", "STEP"]).any():
+    if len(lst) + matching != len(d) or lst.duplicated(["WO", "STEP"]).any():
         sys.exit(f"the list does not account for every line once: {len(lst)} listed + {matching} matching "
                  f"vs {len(d)} lines")
     prev = read_previous(prev_path) if prev_path else None
     notes_carried = carry_notes(lst, prev)
     stale_wos = stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else []
     fates = fates_since_last(prev, d, lst, stale_wos)
+    sql_written, sql_blank = add_sql_update(lst)   # lst is in its final order here
 
     not_extracted = int((l3.CATEGORY == "MASTERS_NOT_EXTRACTED").sum()) if not l3.empty else 0
     not_in_export = int((l3.CATEGORY == "OWN_LINE_NOT_IN_EXPORT").sum()) if not l3.empty else 0
@@ -635,11 +695,15 @@ def main():
         ("Open, not-started WO operations", len(d)),
         ("Work orders", d[WO_KEY].drop_duplicates().shape[0]),
         ("Lines matching their master (not listed)", matching),
-        (f"Lines listed ({LIST_SHEET})", f"{len(lst)} lines, {lst.WORK_ORDER.nunique()} work orders"),
+        (f"Lines listed ({LIST_SHEET})", f"{len(lst)} lines, {lst.WO.nunique()} work orders"),
     ]
     for key, name in SCENARIOS.items():
         part = lst[lst.SCENARIO == name]
-        summary.append((f"Scenario - {name}", f"{len(part)} lines, {part.WORK_ORDER.nunique()} work orders"))
+        summary.append((f"Scenario - {name}", f"{len(part)} lines, {part.WO.nunique()} work orders"))
+    summary += [
+        ("SQL_UPDATE - statements written (Order to update)", sql_written),
+        ("SQL_UPDATE - Order to update lines left empty (master value or WO_OPS_ROWID blank)", sql_blank),
+    ]
     summary.append(("", ""))
     for lab, n in lst[lst.LABEL != ""].LABEL.value_counts().sort_index().items():
         summary.append((f"Label - {lab}", int(n)))
@@ -674,9 +738,8 @@ def main():
         xw.sheets["00_Summary"].column_dimensions["A"].width = 78
         xw.sheets["00_Summary"].column_dimensions["B"].width = 60
         ws = xw.sheets[LIST_SHEET]
-        ws.freeze_panes = "C2"   # SCENARIO and LABEL stay in view
-        widths = {"SCENARIO": 34, "LABEL": 30, "REVISION": 14, "FAMILY": 22, "PART_ID": 16, "PART_DESCRIPTION": 30,
-                  "WORK_ORDER": 14, "OPERATION": 24, "DIFFERENCES": 50, "NOTE": 40, "DIFF_KEY": 30}
+        widths = {"FAMILY": 22, "PART_ID": 16, "PART_DESCRIPTION": 30, "WO": 14, "OPERATION": 24,
+                  "DIFFERENCES": 50, "DIFF_KEY": 30, "SCENARIO": 34, "SQL_UPDATE": 70, "LABEL": 30, "NOTE": 40}
         for i, c in enumerate(LIST_COLUMNS):
             ws.column_dimensions[ws.cell(1, i + 1).column_letter].width = widths.get(c, 12)
         fs = xw.sheets["02_SinceLastList"]
