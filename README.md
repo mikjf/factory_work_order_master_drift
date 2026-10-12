@@ -82,22 +82,22 @@ exactly one `SCENARIO`, decided in this order:
 | `SCENARIO` | Meaning | Basis |
 |---|---|---|
 | `No master line` | no master line to compare with - a step added to the order (rework `S RIL ...`, test samples) | not comparable |
-| `Order already matches today's master` | an older-revision line that differs from its own old revision, while every value equals the current master | nothing to change on the order |
-| `Resource changed - check` | the resource differs from the master | 28 Sep review: 9 of 13 intentional, 4 not - always looked at |
-| `Order to update` | same resource, another value differs | 28 Sep review: 51 of 51 - the order follows the master |
-| `Differs from today's master (older revision, indicative)` | matches its own old revision, but the current master has a different value | level 3 pairing - indicative |
+| `Work order matches current master` | an older-revision line that differs from its own old revision, while every value equals the current master | nothing to change on the order |
+| `Resource changed` | the resource differs from the master | 28 Sep review: 9 of 13 intentional, 4 not - always looked at |
+| `Work order to update` | same resource, another value differs | 28 Sep review: 51 of 51 - the order follows the master |
+| `Differs from current master (WO on older revision)` | matches its own old revision, but the current master has a different value | level 3 pairing - indicative |
 
 Columns, in order:
 
 | Columns | Content |
 |---|---|
-| `WO_OPS_ROWID`, `M_OPS_ROWID`, `C_MASTER_OPS_ROWID` | the order's operation line, the master line it is compared with, today's master line |
+| `WO_OPS_ROWID`, `M_OPS_ROWID`, `C_MASTER_OPS_ROWID` | the order's operation line, the master line it is compared with, the current master line |
 | `FAMILY`, `PART_ID`, `PART_DESCRIPTION` | which part |
 | `WO`, `WO_STATUS`, `WO_CREATE_DATE`, `WO_DESIRED_RLS_DATE` | which order |
 | `OPERATION`, `STEP` | which step (`STEP` = sequence number) |
 | `WO_REV`, `M_REV`, `C_REV` | the order's revision (`USER_8`), the one it is compared with, today's |
-| `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its master's and today's master's values side by side |
-| `DIFFERENCES`, `DIFF_KEY` | what differs, in words and in machine-readable form (used to recognise the line next time) |
+| `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its master's and the current master's values side by side |
+| `DIFF_KEY` | what differs, each value tagged with its source, e.g. `RUN: 60 (WO) \| 70 (M); SETUP_HRS: 0 (WO) \| 1 (M)` - `(C)` for the current master on the "differs from current master" scenario. Also what recognises the line next time (the plain form of lists before 12 Oct 2026, `RUN=60\|70`, is still read) |
 | `SCENARIO` | see above |
 | `SQL_UPDATE` | the statement for the order - see below |
 | `LABEL` | exactly what differs: resource, rate, setup, run type, load size, crew |
@@ -107,7 +107,7 @@ Columns, in order:
 for an order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an
 order on the current revision `C_` = `M_`.
 
-**`SQL_UPDATE`** is written only on `Order to update` lines:
+**`SQL_UPDATE`** is written only on `Work order to update` lines:
 
 ```
 UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
@@ -120,7 +120,7 @@ UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
 - it is left **empty** when a master value or `WO_OPS_ROWID` is blank, so
   nothing can blank a field by accident;
 - the other scenarios get no statement: a resource change needs a person,
-  today's master is only paired indicatively, and the rest has nothing to
+  the current master is only paired indicatively, and the rest has nothing to
   copy. Nothing here runs anything - it produces the SQL and leaves running
   it to a person who has read it.
 
