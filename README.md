@@ -100,10 +100,8 @@ Columns, in order:
 | `DIFF_KEY` | what differs, each value tagged with its source, e.g. `RUN: 60 (WO) \| 70 (M); SETUP_HRS: 0 (WO) \| 1 (M)` - `(C)` for the current master on the "differs from current master" scenario. Also what recognises the line next time (the plain form of lists before 12 Oct 2026, `RUN=60\|70`, is still read) |
 | `SCENARIO` | see above |
 | `SQL_UPDATE` | the statement for the order - see below |
-| `LABEL` | exactly what differs: resource, rate, setup, run type, load size, crew |
-| `NOTE` | free text, carried to the same line next time |
 
-`M_` is the master the line was compared with: its own revision, or today's
+`M_` is the master the line was compared with: its own revision, or the current one
 for an order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an
 order on the current revision `C_` = `M_`.
 
@@ -124,17 +122,16 @@ UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
   copy. Nothing here runs anything - it produces the SQL and leaves running
   it to a person who has read it.
 
-Save the list where it is: the next run reads the most recently saved list
-in the `outputs` folder (or `--previous <file>`), carries each `NOTE` to the
-same order, step, operation and differences, and fills `02_SinceLastList`.
-Lists made before 12 Oct 2026 had verdict columns; their verdicts arrive in
-`NOTE` as `earlier verdict: ...`.
+Leave the list where it is: the next run reads the most recently saved list
+in the `outputs` folder (or `--previous <file>`) and fills `02_SinceLastList`,
+matching lines on order, step, operation and the same differences. Lists of
+every earlier layout are still read.
 
 ### Output sheets
 
 | Sheet | Content |
 |---|---|
-| `00_Summary` | counts per scenario and per label, checks, input files, what happened since the previous list |
+| `00_Summary` | counts per scenario, checks, input files, what happened since the previous list |
 | `01_SqlUpdater` | **the list**, with the update statements - see above |
 | `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed** (order updated / master updated / both changed / now matches), **started or closed** (produced on the values it had), still listed but changed, or moved by the `USER_8` rule. Shows whether the list is acted on |
 | `03_OldRevisionWOs` | level 2, one row per work order on an older revision, with its level 1 and level 3 counts |

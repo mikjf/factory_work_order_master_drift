@@ -14,12 +14,12 @@ two files were saved on different days.
 
 Output: <repo>_private\\outputs\\master_drift_list_<date>.xlsx by default,
 never inside this repo - it names real parts and orders:
-  00_Summary          counts per scenario and label, checks, since last list
+  00_Summary          counts per scenario, checks, since last list
   01_SqlUpdater       THE list: one row per line that does not match its
                       master - the ROWIDs, part, order, step, revisions, the
                       order's (WO_) / master's (M_) / current master's (C_)
                       values, SCENARIO, SQL_UPDATE (an UPDATE on the order's
-                      operation, "Work order to update" lines only), LABEL, NOTE -
+                      operation, "Work order to update" lines only) -
                       see THE DRIFT LIST and THE SQL UPDATER below
   02_SinceLastList    what happened to each line of the previous list that is
                       not listed again unchanged: fixed (order / master
@@ -40,12 +40,11 @@ revision. Its lines are then compared with the current master, and it is
 listed on 05_StaleUser8. Only the not-started lines are visible here, so
 "every line" means every line in this export.
 
-NOTES. The next run reads the most recently saved list in the outputs
-folder (or --previous) and carries NOTE to the same work order, step,
-operation and the same differences (DIFF_KEY); it also fills
-02_SinceLastList from it. Verdict columns existed until 2026-10-12 (the
-user then chose rules plus a free NOTE); workbooks of that time are still
-read, and a verdict given there survives as "earlier verdict: ..." in NOTE.
+PREVIOUS LIST. The next run reads the most recently saved list in the
+outputs folder (or --previous) and fills 02_SinceLastList from it, matching
+lines on work order, step, operation and the same differences (DIFF_KEY).
+Lists of every earlier layout are still read. Verdict, LABEL and NOTE
+columns existed until 2026-10-12; the user then chose rules alone.
 
 LEVEL 3 - REVIEW AGAIN LATER (agreed with the user, 2026-09-28). A new
 revision inserts steps and shifts later ones, so lines cannot be paired by
@@ -321,10 +320,8 @@ def level2(d, l3):
 #                             matches its own old revision, but level 3 found
 #                             a different value in the current master
 #                             (indicative: cross-revision pairing)
-# Lines that match their master are counted, not listed. LABEL names exactly
-# what differs - resource, rate, setup, run type, load size, crew; for the
-# last scenario it describes the difference with the current master.
-# NOTE is free text and is carried to the same line next time.
+# Lines that match their master are counted, not listed. DIFF_KEY names
+# exactly what differs, each value tagged (WO) / (M) / (C).
 #
 # THE SQL UPDATER (user, 2026-10-12). The list is laid out as the user asked,
 # FTS-updater style: per line the order's (WO_), its master's (M_) and today's
@@ -343,8 +340,6 @@ def level2(d, l3):
 # by the stale-USER_8 rule). For orders on the current revision C_ = M_.
 # ---------------------------------------------------------------------------
 
-NAMES = {"RUN": "rate", "SETUP_HRS": "setup", "RUN_TYPE": "run type", "LOAD_SIZE_QTY": "load size",
-         "USER_5": "crew"}
 SCENARIOS = {  # key -> shown name; dict order = sort order of the list
     "update": "Work order to update",
     "check": "Resource changed",
@@ -353,7 +348,7 @@ SCENARIOS = {  # key -> shown name; dict order = sort order of the list
     "nomaster": "No master line",
 }
 LIST_SHEET = "01_SqlUpdater"
-# older workbooks still read for NOTE carry and 02_SinceLastList
+# older workbooks still read for 02_SinceLastList
 OLD_DRIFT_LIST_SHEET = "01_DriftList"                                           # 2026-10-12, before the updater
 OLD_LIST_SHEETS = ("01_OrdersToUpdate", "02_ResourceCheck", "03_Information")   # 2026-10-12 afternoon
 OLD_REVIEW_SHEETS = ("05_Review", "Lines")                                      # one row per field
@@ -371,7 +366,7 @@ LIST_COLUMNS = (
      "WO", "WO_STATUS", "WO_CREATE_DATE", "WO_DESIRED_RLS_DATE", "OPERATION", "STEP",
      "WO_REV", "M_REV", "C_REV"]
     + VALUE_COLUMNS
-    + ["DIFF_KEY", "SCENARIO", "SQL_UPDATE", "LABEL", "NOTE"])
+    + ["DIFF_KEY", "SCENARIO", "SQL_UPDATE"])
 
 
 def seq_key(v):
@@ -421,13 +416,6 @@ def canonical_diff(diff_key):
     return "; ".join(f"{f}={pairs[f][0]}|{pairs[f][1]}" for f in FIELDS if f in pairs)
 
 
-def label_of(fields):
-    others = [n for f, n in NAMES.items() if f in fields]
-    if "RESOURCE_ID" in fields:
-        return "different resource" + (": " + " + ".join(others) if others else ", nothing else")
-    return "same resource: " + " + ".join(others) if others else ""
-
-
 
 def build_list(d, l3):
     """The drift list: one row per line that does not match its master. See above."""
@@ -469,7 +457,6 @@ def build_list(d, l3):
             "C_REV": r.CURRENT_REV,
             "DIFF_KEY": make_diff_key(pairs, "C" if key == "today" else "M"),
             "SCENARIO": SCENARIOS[key], "SQL_UPDATE": "",
-            "LABEL": "no master line" if key == "nomaster" else label_of(pairs), "NOTE": "",
         }
         for f, s in SHORT.items():
             rec[f"WO_{s}"] = getattr(r, f"WO_{f}")
@@ -478,7 +465,7 @@ def build_list(d, l3):
                              l3.at[idx, f"CUR_{f}"] if compared else pd.NA)
         rows.append(rec)
     x = pd.DataFrame(rows, columns=["_S", "_DIFF"] + LIST_COLUMNS)
-    return x.sort_values(["_S", "LABEL", "OPERATION", "WO", "STEP"]).reset_index(drop=True), matching
+    return x.sort_values(["_S", "OPERATION", "WO", "STEP"]).reset_index(drop=True), matching
 
 
 def add_sql_update(lst):
@@ -510,35 +497,21 @@ def line_key(df, seq_col, wo_col="WORK_ORDER"):
                     df.DIFF_KEY.map(canonical_diff)))
 
 
-def fold_verdict(verdict, note):
-    """Earlier workbooks had a VERDICT column; its value survives in NOTE."""
-    v, note = (code(verdict) or "").strip(), code(note) or ""
-    if not v or "/" in v:
-        return note
-    return f"earlier verdict: {v}" + (f" | {note}" if note else "")
-
-
 def fields_to_lines(df):
     """One-row-per-field review (before 2026-10-12) -> one row per line."""
     df = df.copy()
-    if "NOTE" not in df:
-        df["NOTE"] = pd.NA
     df["_W"], df["_S"], df["_O"] = df.WORK_ORDER.map(code), df.SEQ.map(seq_key), df.OPERATION.map(code)
     out = []
     for (w, s, o), g in df.groupby(["_W", "_S", "_O"], dropna=False):
         pairs = {code(f): (code(a) or "(empty)", code(b) or "(empty)")
                  for f, a, b in zip(g.FIELD, g.WO_VALUE, g.MASTER_VALUE)}
-        texts = sorted({(code(v) or "").strip() for v in g.VERDICT})
-        notes = sorted({code(n) for n in g.NOTE if code(n)})
         out.append({"WORK_ORDER": w, "SEQ": s, "OPERATION": o, "DIFF_KEY": make_diff_key(pairs),
-                    "NOTE": fold_verdict(" / ".join(t for t in texts if t) if len(texts) > 1 else texts[0],
-                                         " | ".join(notes)),
                     "SCENARIO": ""})
     return pd.DataFrame(out)
 
 
 def read_previous(path):
-    """The previous list as WORK_ORDER / SEQ / OPERATION / DIFF_KEY / NOTE / SCENARIO, any of our formats."""
+    """The previous list as WORK_ORDER / SEQ / OPERATION / DIFF_KEY / SCENARIO, any of our layouts."""
     sheets = pd.ExcelFile(path).sheet_names
     if LIST_SHEET in sheets:
         p = pd.read_excel(path, sheet_name=LIST_SHEET, dtype=str).rename(columns={"WO": "WORK_ORDER", "STEP": "SEQ"})
@@ -547,15 +520,14 @@ def read_previous(path):
     elif any(s in sheets for s in OLD_LIST_SHEETS):
         p = pd.concat([pd.read_excel(path, sheet_name=s, dtype=str) for s in OLD_LIST_SHEETS if s in sheets],
                       ignore_index=True)
-        p["NOTE"] = [fold_verdict(v, n) for v, n in zip(p.VERDICT, p.NOTE)]
         p["SCENARIO"] = p.get("LIST", "")
     else:
         sheet = next(s for s in OLD_REVIEW_SHEETS if s in sheets)
         p = fields_to_lines(pd.read_excel(path, sheet_name=sheet, dtype=str))
-    for c in ("NOTE", "SCENARIO", "DIFF_KEY"):
+    for c in ("SCENARIO", "DIFF_KEY"):
         if c not in p:
             p[c] = ""
-    return p[["WORK_ORDER", "SEQ", "OPERATION", "DIFF_KEY", "NOTE", "SCENARIO"]].fillna("")
+    return p[["WORK_ORDER", "SEQ", "OPERATION", "DIFF_KEY", "SCENARIO"]].fillna("")
 
 
 def find_previous(folder):
@@ -574,19 +546,6 @@ def find_previous(folder):
         except Exception:
             continue
     return None
-
-
-def carry_notes(lst, prev):
-    """NOTE from the previous list, to the same work order, step, operation and differences."""
-    if prev is None or prev.empty:
-        return 0
-    notes = {k: n for k, n in zip(line_key(prev, "SEQ"), prev.NOTE) if code(n)}
-    carried = 0
-    for i, k in zip(lst.index, line_key(lst, "STEP", "WO")):
-        if k in notes:
-            lst.at[i, "NOTE"] = notes[k]
-            carried += 1
-    return carried
 
 
 def same_value(a, b, field):
@@ -617,7 +576,7 @@ def fates_since_last(prev, d, lst, stale_wos):
       fixed - now matches            no longer differs (a line without master line
                                      or compared with the current master before)
     """
-    cols = ["FATE", "WO", "STEP", "OPERATION", "SCENARIO_BEFORE", "DIFF_KEY_BEFORE", "DIFF_KEY_NOW", "NOTE_BEFORE"]
+    cols = ["FATE", "WO", "STEP", "OPERATION", "SCENARIO_BEFORE", "DIFF_KEY_BEFORE", "DIFF_KEY_NOW"]
     if prev is None or prev.empty:
         return pd.DataFrame(columns=cols)
     current = set(line_key(lst, "STEP", "WO"))
@@ -627,7 +586,7 @@ def fates_since_last(prev, d, lst, stale_wos):
         by_line.setdefault((w, s), i)
     stale = {code(w) for w in stale_wos}
     rows = []
-    for (w, s, op, dk), note, scen in zip(line_key(prev, "SEQ"), prev.NOTE, prev.SCENARIO):
+    for (w, s, op, dk), scen in zip(line_key(prev, "SEQ"), prev.SCENARIO):
         if (w, s, op, dk) in current:
             continue
         before = parse_diff_key(dk)
@@ -652,7 +611,7 @@ def fates_since_last(prev, d, lst, stale_wos):
                 fate = "fixed - both changed"
         rows.append({"FATE": fate, "WO": w, "STEP": s, "OPERATION": op, "SCENARIO_BEFORE": scen,
                      "DIFF_KEY_BEFORE": make_diff_key(before, "C" if str(scen).startswith("Differs from") else "M"),
-                     "DIFF_KEY_NOW": now, "NOTE_BEFORE": code(note) or ""})
+                     "DIFF_KEY_NOW": now})
     return pd.DataFrame(rows, columns=cols).sort_values(["FATE", "WO", "STEP"]).reset_index(drop=True)
 
 
@@ -662,7 +621,7 @@ def main():
     ap.add_argument("--masters", type=Path, default=PRIVATE_DIR / "data" / "masters.xlsx")
     ap.add_argument("--out", type=Path, help="default: <repo>_private\\outputs\\master_drift_list_<today>.xlsx")
     ap.add_argument("--previous", type=Path,
-                    help="list to compare with and carry notes from (default: the most recently saved one in outputs)")
+                    help="list to compare with (default: the most recently saved one in outputs)")
     a = ap.parse_args()
 
     for p in (a.drift, a.masters):
@@ -697,7 +656,6 @@ def main():
         sys.exit(f"the list does not account for every line once: {len(lst)} listed + {matching} matching "
                  f"vs {len(d)} lines")
     prev = read_previous(prev_path) if prev_path else None
-    notes_carried = carry_notes(lst, prev)
     stale_wos = stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else []
     fates = fates_since_last(prev, d, lst, stale_wos)
     sql_written, sql_blank = add_sql_update(lst)   # lst is in its final order here
@@ -726,10 +684,6 @@ def main():
         ("SQL_UPDATE - Work order to update lines left empty (master value or WO_OPS_ROWID blank)", sql_blank),
     ]
     summary.append(("", ""))
-    for lab, n in lst[lst.LABEL != ""].LABEL.value_counts().sort_index().items():
-        summary.append((f"Label - {lab}", int(n)))
-    summary.append(("", ""))
-    summary.append(("Notes carried from the previous list", notes_carried))
     summary.append(("Since the previous list (02_SinceLastList) - lines not listed again unchanged", len(fates)))
     summary += [(f"Since the previous list - {k}", int(n)) for k, n in fates.FATE.value_counts().sort_index().items()]
     summary += [
@@ -760,7 +714,7 @@ def main():
         xw.sheets["00_Summary"].column_dimensions["B"].width = 60
         ws = xw.sheets[LIST_SHEET]
         widths = {"FAMILY": 22, "PART_ID": 16, "PART_DESCRIPTION": 30, "WO": 14, "OPERATION": 24,
-                  "DIFF_KEY": 50, "SCENARIO": 34, "SQL_UPDATE": 70, "LABEL": 30, "NOTE": 40}
+                  "DIFF_KEY": 50, "SCENARIO": 34, "SQL_UPDATE": 70}
         for i, c in enumerate(LIST_COLUMNS):
             ws.column_dimensions[ws.cell(1, i + 1).column_letter].width = widths.get(c, 12)
         fs = xw.sheets["02_SinceLastList"]
