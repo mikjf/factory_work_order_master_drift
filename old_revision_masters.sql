@@ -46,6 +46,10 @@ SELECT
     WO_M.STATUS           AS MASTER_STATUS,
     O.SEQUENCE_NO,
     O.OPERATION_TYPE      AS OPERATION,
+    -- ADDED 2026-10-12: so a work order moved onto the current routing by the
+    -- stale-USER_8 rule in master_drift.py shows which master line it is now
+    -- compared with. The script accepts exports without it (blank ROWID).
+    O.ROWID               AS MASTER_OPS_ROWID,
     O.RESOURCE_ID,
     O.RUN_TYPE,
     O.RUN,
