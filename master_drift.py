@@ -365,8 +365,9 @@ def level2(d, l3):
 #     field by accident. Nothing here runs anything.
 # The cells of each difference in DIFF_KEY are coloured (user, 2026-10-13):
 # the order's value (WO_) orange, the value it is compared with green - M_, or
-# C_ on "Differs from current master". Fills are fixed at writing time; they
-# do not follow edits made in the sheet.
+# C_ on "Differs from current master". "Work order to update" rows are light
+# grey across the row underneath. Fills are fixed at writing time; they do
+# not follow edits made in the sheet.
 # M_REV is the revision the line was compared with (= C_REV for an order moved
 # by the stale-USER_8 rule). For orders on the current revision C_ = M_.
 # ---------------------------------------------------------------------------
@@ -523,16 +524,20 @@ def add_sql_update(lst):
     return written, blank
 
 
-FILL_WO, FILL_TARGET = "FCE4D6", "E2EFDA"   # light orange, light green
+FILL_WO, FILL_TARGET, FILL_UPDATE = "FCE4D6", "E2EFDA", "EDEDED"   # light orange, light green, light grey
 
 
 def colour_differences(ws, lst):
     """Colour the two cells of every difference in DIFF_KEY. See THE SQL UPDATER above."""
     from openpyxl.styles import PatternFill
-    fills = {p: PatternFill("solid", start_color=c, end_color=c) for p, c in (("WO", FILL_WO), ("T", FILL_TARGET))}
+    fills = {p: PatternFill("solid", start_color=c, end_color=c)
+             for p, c in (("WO", FILL_WO), ("T", FILL_TARGET), ("U", FILL_UPDATE))}
     pos = {c: i + 1 for i, c in enumerate(LIST_COLUMNS)}
     coloured = 0
     for n, (_, r) in enumerate(lst.iterrows(), start=2):
+        if r.SCENARIO == SCENARIOS["update"]:   # whole row grey first, the differences on top
+            for i in range(1, len(LIST_COLUMNS) + 1):
+                ws.cell(n, i).fill = fills["U"]
         target = "C" if r.SCENARIO == SCENARIOS["today"] else "M"
         for f in r._DIFF:
             ws.cell(n, pos[f"WO_{SHORT[f]}"]).fill = fills["WO"]

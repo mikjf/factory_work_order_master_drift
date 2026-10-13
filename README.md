@@ -108,7 +108,8 @@ Columns, in order:
 
 For every difference in `DIFF_KEY` the two cells involved are coloured: the
 order's value (`WO_`) light orange, the value it is compared with light green -
-`M_`, or `C_` on `Differs from current master`. The colours are set when the
+`M_`, or `C_` on `Differs from current master`. `Work order to update` rows
+are light grey across the whole row, under those two colours. The colours are set when the
 list is written and do not follow later edits in the sheet.
 
 `M_` is the master the line was compared with: its own revision, or the current one
