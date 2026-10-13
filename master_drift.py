@@ -324,18 +324,22 @@ def level2(d, l3):
 # exactly what differs, each value tagged (WO) / (M) / (C).
 #
 # THE SQL UPDATER (user, 2026-10-12). The list is laid out as the user asked,
-# FTS-updater style: per line the order's (WO_), its master's (M_) and today's
-# master's (C_) values side by side, and SQL_UPDATE - a spreadsheet FORMULA
+# FTS-updater style: per line the order's (WO_), its master's (M_) and the
+# current master's (C_) values side by side, and SQL_UPDATE - a spreadsheet FORMULA
 # that builds an UPDATE on the work-order operation (WO_OPS_ROWID) from the M_
 # cells of its own row, so correcting a value corrects the statement.
 #   - only on "Work order to update": the other scenarios need a person
 #     (resource), are indicative (current master), or have nothing to copy;
 #   - the value is M_, the master the line was compared with (exact pairing by
 #     sequence + name), never C_ on an older revision (indicative pairing);
-#   - it sets only the fields that differ; never RESOURCE_ID (an "Order to
+#   - it sets only the fields that differ; never RESOURCE_ID (a "Work order to
 #     update" line has the same resource by definition);
 #   - empty when a master value or the ROWID is blank, so nothing can blank a
 #     field by accident. Nothing here runs anything.
+# The cells of each difference in DIFF_KEY are coloured (user, 2026-10-13):
+# the order's value (WO_) orange, the value it is compared with green - M_, or
+# C_ on "Differs from current master". Fills are fixed at writing time; they
+# do not follow edits made in the sheet.
 # M_REV is the revision the line was compared with (= C_REV for an order moved
 # by the stale-USER_8 rule). For orders on the current revision C_ = M_.
 # ---------------------------------------------------------------------------
@@ -492,6 +496,24 @@ def add_sql_update(lst):
     return written, blank
 
 
+FILL_WO, FILL_TARGET = "FCE4D6", "E2EFDA"   # light orange, light green
+
+
+def colour_differences(ws, lst):
+    """Colour the two cells of every difference in DIFF_KEY. See THE SQL UPDATER above."""
+    from openpyxl.styles import PatternFill
+    fills = {p: PatternFill("solid", start_color=c, end_color=c) for p, c in (("WO", FILL_WO), ("T", FILL_TARGET))}
+    pos = {c: i + 1 for i, c in enumerate(LIST_COLUMNS)}
+    coloured = 0
+    for n, (_, r) in enumerate(lst.iterrows(), start=2):
+        target = "C" if r.SCENARIO == SCENARIOS["today"] else "M"
+        for f in r._DIFF:
+            ws.cell(n, pos[f"WO_{SHORT[f]}"]).fill = fills["WO"]
+            ws.cell(n, pos[f"{target}_{SHORT[f]}"]).fill = fills["T"]
+            coloured += 1
+    return coloured
+
+
 def line_key(df, seq_col, wo_col="WORK_ORDER"):
     return list(zip(df[wo_col].map(code), df[seq_col].map(seq_key), df.OPERATION.map(code),
                     df.DIFF_KEY.map(canonical_diff)))
@@ -530,15 +552,16 @@ def read_previous(path):
     return p[["WORK_ORDER", "SEQ", "OPERATION", "DIFF_KEY", "SCENARIO"]].fillna("")
 
 
-def find_previous(folder):
+def find_previous(folder, out):
     """Most recently saved workbook in folder holding a list (any of our formats), or None.
 
-    The output file itself counts: a second run on the same day overwrites
-    the list of the first, and must still read it (it is read before the
-    new list is written).
+    The output file itself does not count: a second run on the same day
+    overwrites the first and still compares with the previous list, not with
+    its own earlier run. (It counted while NOTE had to survive a rerun.)
     """
     wanted = {LIST_SHEET, OLD_DRIFT_LIST_SHEET, *OLD_LIST_SHEETS, *OLD_REVIEW_SHEETS}
-    files = [p for p in folder.glob("*.xlsx") if not p.name.startswith("~$")]
+    files = [p for p in folder.glob("*.xlsx")
+             if not p.name.startswith("~$") and p.resolve() != out.resolve()]
     for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             if wanted & set(pd.ExcelFile(p).sheet_names):
@@ -635,7 +658,7 @@ def main():
     masters_day = datetime.fromtimestamp(a.masters.stat().st_mtime).date()
     if a.previous and not a.previous.exists():
         sys.exit(f"previous list not found: {a.previous}")
-    prev_path = a.previous or find_previous(PRIVATE_DIR / "outputs")
+    prev_path = a.previous or find_previous(PRIVATE_DIR / "outputs", out)
 
     d = normalise_drift(load(a.drift, DRIFT_COLUMNS))
     m = normalise_masters(load(a.masters, MASTER_COLUMNS))
@@ -717,6 +740,7 @@ def main():
                   "DIFF_KEY": 50, "SCENARIO": 34, "SQL_UPDATE": 70}
         for i, c in enumerate(LIST_COLUMNS):
             ws.column_dimensions[ws.cell(1, i + 1).column_letter].width = widths.get(c, 12)
+        colour_differences(ws, lst)
         fs = xw.sheets["02_SinceLastList"]
         for col, w in {"A": 26, "B": 14, "C": 7, "D": 24, "E": 34, "F": 50, "G": 50, "H": 40}.items():
             fs.column_dimensions[col].width = w

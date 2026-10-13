@@ -101,6 +101,11 @@ Columns, in order:
 | `SCENARIO` | see above |
 | `SQL_UPDATE` | the statement for the order - see below |
 
+For every difference in `DIFF_KEY` the two cells involved are coloured: the
+order's value (`WO_`) light orange, the value it is compared with light green -
+`M_`, or `C_` on `Differs from current master`. The colours are set when the
+list is written and do not follow later edits in the sheet.
+
 `M_` is the master the line was compared with: its own revision, or the current one
 for an order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an
 order on the current revision `C_` = `M_`.
@@ -123,7 +128,8 @@ UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
   it to a person who has read it.
 
 Leave the list where it is: the next run reads the most recently saved list
-in the `outputs` folder (or `--previous <file>`) and fills `02_SinceLastList`,
+in the `outputs` folder, other than the one it is about to overwrite (or
+`--previous <file>`), and fills `02_SinceLastList`,
 matching lines on order, step, operation and the same differences. Lists of
 every earlier layout are still read.
 
