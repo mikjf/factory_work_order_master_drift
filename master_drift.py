@@ -23,8 +23,8 @@ never inside this repo - it names real parts and orders:
                       see THE DRIFT LIST and THE SQL UPDATER below
   02_SinceLastList    what happened to each line of the previous list that is
                       not listed again unchanged: fixed (order / master
-                      updated) or started on the old values - see
-                      fates_since_last() (user, 2026-10-12)
+                      updated), started on the old values, or the step
+                      replaced - see fates_since_last() (user, 2026-10-12)
   03_OldRevisionWOs   LEVEL 2: one row per WO built on an older revision
   04_CrossRevision    LEVEL 3 (INDICATIVE): older-revision WO lines against
                       the CURRENT revision's master
@@ -132,10 +132,36 @@ def load(path, required):
     return df
 
 
-def normalise_drift(d):
+# Both queries write resource IDs as 'RES:' + ID (2026-10-13): pasted into
+# Excel, '034' became the number 34. Exactly the marker is stripped, so an ID
+# that itself starts with R or RES is kept whole. A resource without the
+# marker means an export from an older query, and the run stops.
+RESOURCE_MARK = "RES:"
+
+
+def unmark_resources(s, where):
+    def strip(v):
+        if pd.isna(v):
+            return v
+        v = str(v)
+        if not v.startswith(RESOURCE_MARK):
+            bad.append(v)
+            return v
+        return v[len(RESOURCE_MARK):]
+    bad = []
+    out = s.map(strip)
+    if bad:
+        sys.exit(f"{where}: {len(bad)} resource IDs without the '{RESOURCE_MARK}' marker (e.g. {bad[0]!r}) - "
+                 "rerun the current query: Excel drops leading zeros from unmarked IDs")
+    return out
+
+
+def normalise_drift(d, name):
     # WORKORDER_OPS_ROWID is optional: exports before 2026-10-12 lack it
     if "WORKORDER_OPS_ROWID" not in d:
         d["WORKORDER_OPS_ROWID"] = pd.NA
+    for c in ["WO_RESOURCE_ID", "M_RESOURCE_ID"]:
+        d[c] = unmark_resources(d[c], f"{name} {c}")
     for c in ["WO_REV", "CURRENT_REV", "OPERATION", "WO_KIND", "WO_STATUS", "OP_STATUS", "PART_ID"]:
         d[c] = d[c].map(code)
     for f, (text, _) in FIELDS.items():
@@ -145,7 +171,8 @@ def normalise_drift(d):
     return d
 
 
-def normalise_masters(m):
+def normalise_masters(m, name):
+    m["RESOURCE_ID"] = unmark_resources(m["RESOURCE_ID"], f"{name} RESOURCE_ID")
     for c in ["PART_ID", "ROLE", "REV", "OPERATION", "RESOURCE_ID", "RUN_TYPE"]:
         m[c] = m[c].map(code)
     if "MASTER_OPS_ROWID" not in m:
@@ -543,9 +570,11 @@ def read_previous(path):
         p = pd.concat([pd.read_excel(path, sheet_name=s, dtype=str) for s in OLD_LIST_SHEETS if s in sheets],
                       ignore_index=True)
         p["SCENARIO"] = p.get("LIST", "")
-    else:
+    elif any(s in sheets for s in OLD_REVIEW_SHEETS):
         sheet = next(s for s in OLD_REVIEW_SHEETS if s in sheets)
         p = fields_to_lines(pd.read_excel(path, sheet_name=sheet, dtype=str))
+    else:
+        sys.exit(f"{path.name} holds no list this script can read (sheets: {', '.join(sheets)})")
     for c in ("SCENARIO", "DIFF_KEY"):
         if c not in p:
             p[c] = ""
@@ -590,8 +619,13 @@ def fates_since_last(prev, d, lst, stale_wos):
 
     FATE, in this order:
       moved by USER_8 rule           its work order is now on 05_StaleUser8
-      started or closed              no longer an open, not-started operation -
-                                     produced (or closing) on the values it had
+      step replaced by another       the order still has the step open, but under
+        operation                    another operation name - the line was
+                                     removed or renamed, not fixed (user, 2026-10-13)
+      started, closed or removed     the step is no longer an open, not-started
+                                     operation - mostly produced (or closing) on
+                                     the values it had; this export cannot tell a
+                                     started step from a deleted one
       still listed, changed          listed again, with other differences
       fixed - order updated          the order now carries the old master value
       fixed - master updated         the master now carries the order's old value
@@ -603,10 +637,13 @@ def fates_since_last(prev, d, lst, stale_wos):
     if prev is None or prev.empty:
         return pd.DataFrame(columns=cols)
     current = set(line_key(lst, "STEP", "WO"))
-    listed_now = {(code(w), seq_key(s)) for w, s in zip(lst.WO, lst.STEP)}
-    by_line = {}
-    for i, w, s in zip(d.index, d.WORK_ORDER.map(code), d.OPERATION_SEQUENCE.map(seq_key)):
-        by_line.setdefault((w, s), i)
+    # lines are matched on order, step AND operation name: a step can be
+    # replaced by another operation under the same number
+    listed_now = {(code(w), seq_key(s), code(o)) for w, s, o in zip(lst.WO, lst.STEP, lst.OPERATION)}
+    by_line, steps = {}, set()
+    for i, w, s, o in zip(d.index, d.WORK_ORDER.map(code), d.OPERATION_SEQUENCE.map(seq_key), d.OPERATION.map(code)):
+        by_line.setdefault((w, s, o), i)
+        steps.add((w, s))
     stale = {code(w) for w in stale_wos}
     rows = []
     for (w, s, op, dk), scen in zip(line_key(prev, "SEQ"), prev.SCENARIO):
@@ -616,12 +653,12 @@ def fates_since_last(prev, d, lst, stale_wos):
         now = ""
         if w in stale:
             fate = "moved by USER_8 rule"
-        elif (w, s) not in by_line:
-            fate = "started or closed"
-        elif (w, s) in listed_now:
+        elif (w, s, op) not in by_line:
+            fate = "step replaced by another operation" if (w, s) in steps else "started, closed or removed"
+        elif (w, s, op) in listed_now:
             fate = "still listed, changed"
         else:
-            r = d.loc[by_line[(w, s)]]
+            r = d.loc[by_line[(w, s, op)]]
             now = make_diff_key({f: (shown(r[f"WO_{f}"]), shown(r[f"M_{f}"])) for f in before})
             own_compare = before and not str(scen).startswith("Differs from")
             if not own_compare:
@@ -660,8 +697,8 @@ def main():
         sys.exit(f"previous list not found: {a.previous}")
     prev_path = a.previous or find_previous(PRIVATE_DIR / "outputs", out)
 
-    d = normalise_drift(load(a.drift, DRIFT_COLUMNS))
-    m = normalise_masters(load(a.masters, MASTER_COLUMNS))
+    d = normalise_drift(load(a.drift, DRIFT_COLUMNS), a.drift.name)
+    m = normalise_masters(load(a.masters, MASTER_COLUMNS), a.masters.name)
 
     dup = int(d.duplicated(LINE_KEY).sum())
     if dup:
@@ -742,7 +779,7 @@ def main():
             ws.column_dimensions[ws.cell(1, i + 1).column_letter].width = widths.get(c, 12)
         colour_differences(ws, lst)
         fs = xw.sheets["02_SinceLastList"]
-        for col, w in {"A": 26, "B": 14, "C": 7, "D": 24, "E": 34, "F": 50, "G": 50, "H": 40}.items():
+        for col, w in {"A": 34, "B": 14, "C": 7, "D": 24, "E": 34, "F": 50, "G": 50, "H": 40}.items():
             fs.column_dimensions[col].width = w
 
     for k, v in summary:

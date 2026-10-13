@@ -50,7 +50,9 @@ SELECT
     -- stale-USER_8 rule in master_drift.py shows which master line it is now
     -- compared with. The script accepts exports without it (blank ROWID).
     O.ROWID               AS MASTER_OPS_ROWID,
-    O.RESOURCE_ID,
+    -- text marker 'RES:' (2026-10-13), as in master_drift.sql: keeps a
+    -- leading zero through the paste into Excel; master_drift.py strips it.
+    'RES:' + O.RESOURCE_ID  AS RESOURCE_ID,
     O.RUN_TYPE,
     O.RUN,
     O.LOAD_SIZE_QTY,

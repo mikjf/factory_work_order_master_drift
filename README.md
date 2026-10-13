@@ -69,6 +69,11 @@ Paste each query's result into the first sheet with its header row, and
 overwrite the previous files. Both queries must run on the same day: masters
 change.
 
+Both queries write resource IDs as `RES:034`, not `034`: pasted into Excel, an
+ID with a leading zero turned into a number and lost the zero. The script
+strips exactly the `RES:` marker, so the list shows `034`, and it stops if a
+resource has no marker - an export from an older version of the query.
+
 The list is written to
 `..\factory_work_order_master_drift_private\outputs\master_drift_list_<date>.xlsx`.
 `--drift`, `--masters`, `--out` and `--previous` override the paths.
@@ -139,7 +144,7 @@ every earlier layout are still read.
 |---|---|
 | `00_Summary` | counts per scenario, checks, input files, what happened since the previous list |
 | `01_SqlUpdater` | **the list**, with the update statements - see above |
-| `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed** (order updated / master updated / both changed / now matches), **started or closed** (produced on the values it had), still listed but changed, or moved by the `USER_8` rule. Shows whether the list is acted on |
+| `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed** (order updated / master updated / both changed / now matches), **started, closed or removed** (mostly produced on the values it had - the export cannot tell a started step from a deleted one), **step replaced by another operation** (same step number, another operation name: removed or renamed, not fixed), still listed but changed, or moved by the `USER_8` rule. Shows whether the list is acted on |
 | `03_OldRevisionWOs` | level 2, one row per work order on an older revision, with its level 1 and level 3 counts |
 | `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current master's values (`CUR_*`, `D3_*`) |
 | `05_StaleUser8` | orders moved onto the current routing because `USER_8` is out of date, with what they showed before |

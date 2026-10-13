@@ -66,8 +66,12 @@ SELECT
     O.ROWID                     AS WORKORDER_OPS_ROWID,
 
     -- side by side: work order copy | master
-    O.RESOURCE_ID               AS WO_RESOURCE_ID,
-    O_M.RESOURCE_ID             AS M_RESOURCE_ID,
+    -- Resource IDs carry the text marker 'RES:' (2026-10-13): pasted into
+    -- Excel, '034' became the number 34. 'RES:034' stays text; master_drift.py
+    -- strips exactly the marker and stops on a resource without it. NULL
+    -- stays NULL. D_RESOURCE below compares the raw IDs.
+    'RES:' + O.RESOURCE_ID      AS WO_RESOURCE_ID,
+    'RES:' + O_M.RESOURCE_ID    AS M_RESOURCE_ID,
     O.RUN_TYPE                  AS WO_RUN_TYPE,
     O_M.RUN_TYPE                AS M_RUN_TYPE,
     O.RUN                       AS WO_RUN,
