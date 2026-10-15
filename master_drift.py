@@ -1,16 +1,18 @@
-"""Master drift - build the planners' workbook from the two SQL exports.
+"""Master drift - build the planners' workbook from the two SQL queries.
 
-Inputs (exported to Excel, first sheet, header row as the query names it),
-by default in the private folder next to this repo
-(<repo>_private\\data\\):
-  drift.xlsx    output of master_drift.sql        (level 1, one row per open,
-                                                   not-started WO operation)
-  masters.xlsx  output of old_revision_masters.sql (master lines of the own
-                                                   and the current revision,
-                                                   for parts with
-                                                   older-revision WOs)
-Run both queries on the same day: masters change. The script warns if the
-two files were saved on different days.
+    python master_drift.py               query the ERP, then build the list
+    python master_drift.py --no-extract  build again from the last extract
+
+Inputs: the results of
+  master_drift.sql          level 1, one row per open, not-started WO operation
+  old_revision_masters.sql  master lines of the own and the current revision,
+                            for parts with older-revision WOs
+By default extract.py runs both against the ERP (read-only, Windows login,
+settings in <repo>_private\\extract.ini) and saves them as Parquet in
+<repo>_private\\data\\ - together, so they always come from the same moment
+(since 2026-10-15). The manual route still works: --drift and --masters take
+exports pasted into Excel, as used until then; the script warns if the two
+were saved on different days, or if their resource IDs lost leading zeros.
 
 Output: <repo>_private\\outputs\\master_drift_list_<date>.xlsx by default,
 never inside this repo - it names real parts and orders:
@@ -61,6 +63,8 @@ The standing assumption is "same name = same step". It is not proven.
 """
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 from datetime import datetime
@@ -70,6 +74,14 @@ import pandas as pd
 
 REPO_DIR = Path(__file__).resolve().parent
 PRIVATE_DIR = REPO_DIR.parent / f"{REPO_DIR.name}_private"
+# the queries extract.py runs, in step with extract.QUERIES (checked when it
+# runs); named here too so --no-extract works without pyodbc
+EXTRACT_QUERIES = ("master_drift.sql", "old_revision_masters.sql")
+
+
+def query_sha256(name):
+    """SHA-256 of a query file, as extract.py records it in its manifest."""
+    return hashlib.sha256((REPO_DIR / name).read_text(encoding="utf-8-sig").encode("utf-8")).hexdigest()
 
 WO_KEY = ["WORK_ORDER", "LOT_ID", "SPLIT_ID", "SUB_ID"]
 LINE_KEY = WO_KEY + ["OPERATION_SEQUENCE"]
@@ -125,56 +137,70 @@ def same(a, b, text, null_as=None):
 
 
 def load(path, required):
-    df = pd.read_excel(path, sheet_name=0)
+    """An input: the Parquet of extract.py, or an Excel export of the manual route."""
+    df = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path, sheet_name=0)
     missing = [c for c in required if c not in df.columns]
     if missing:
         sys.exit(f"{path.name}: missing columns {missing}")
     return df
 
 
-# Both queries write resource IDs as 'RES:' + ID (2026-10-13): pasted into
-# Excel, '034' became the number 34. Exactly the marker is stripped, so an ID
-# that itself starts with R or RES is kept whole. A resource without the
-# marker means an export from an older query, and the run stops.
+# Resource IDs: read straight from the database (extract.py, since 2026-10-15)
+# they arrive as text, '034' included. Excel exports of 13-14 Oct 2026 carry
+# them as 'RES:034' - pasted into Excel, '034' had become the number 34 - and
+# exactly that marker is stripped. Older Excel exports have neither: their
+# leading zeros are lost, and the run says so.
 RESOURCE_MARK = "RES:"
 
 
-def unmark_resources(s, where):
-    def strip(v):
-        if pd.isna(v):
-            return v
-        v = str(v)
-        if not v.startswith(RESOURCE_MARK):
-            bad.append(v)
-            return v
-        return v[len(RESOURCE_MARK):]
-    bad = []
-    out = s.map(strip)
-    if bad:
-        sys.exit(f"{where}: {len(bad)} resource IDs without the '{RESOURCE_MARK}' marker (e.g. {bad[0]!r}) - "
-                 "rerun the current query: Excel drops leading zeros from unmarked IDs")
-    return out
+def unmark_resources(s, where, warnings):
+    vals = s.dropna().astype(str)
+    marked = vals.str.startswith(RESOURCE_MARK)
+    if marked.all() and len(vals):
+        return s.map(lambda v: v if pd.isna(v) else str(v)[len(RESOURCE_MARK):])
+    if marked.any():
+        sys.exit(f"{where}: {int((~marked).sum())} of {len(vals)} resource IDs lack the '{RESOURCE_MARK}' marker - "
+                 "an export mixing two versions of the query")
+    if not pd.api.types.is_string_dtype(s) and len(vals):
+        warnings.append(f"{where}: resource IDs read as numbers - an Excel export without the marker, "
+                        "leading zeros are lost (034 shows as 34); run without --drift/--masters")
+    return s
 
 
-def normalise_drift(d, name):
+# Numbers compared as numbers. Excel turned every numeric-looking text into a
+# number; from the database a text column such as USER_5 (crew) arrives as
+# text. Both are made numbers here - a value that is not a number stops the run.
+NUMERIC = [f for f, (text, _) in FIELDS.items() if not text]
+
+
+def to_number(s, where):
+    n = pd.to_numeric(s, errors="coerce")
+    bad = s[n.isna() & s.notna() & (s.astype(str).str.strip() != "")]
+    if len(bad):
+        sys.exit(f"{where}: {len(bad)} values that are not numbers (e.g. {bad.iloc[0]!r})")
+    return n.astype(float)
+
+
+def normalise_drift(d, name, warnings):
     # WORKORDER_OPS_ROWID is optional: exports before 2026-10-12 lack it
     if "WORKORDER_OPS_ROWID" not in d:
         d["WORKORDER_OPS_ROWID"] = pd.NA
     for c in ["WO_RESOURCE_ID", "M_RESOURCE_ID"]:
-        d[c] = unmark_resources(d[c], f"{name} {c}")
+        d[c] = unmark_resources(d[c], f"{name} {c}", warnings)
     for c in ["WO_REV", "CURRENT_REV", "OPERATION", "WO_KIND", "WO_STATUS", "OP_STATUS", "PART_ID"]:
         d[c] = d[c].map(code)
     for f, (text, _) in FIELDS.items():
-        if text:
-            d[f"WO_{f}"] = d[f"WO_{f}"].map(code)
-            d[f"M_{f}"] = d[f"M_{f}"].map(code)
+        for c in (f"WO_{f}", f"M_{f}"):
+            d[c] = d[c].map(code) if text else to_number(d[c], f"{name} {c}")
     return d
 
 
-def normalise_masters(m, name):
-    m["RESOURCE_ID"] = unmark_resources(m["RESOURCE_ID"], f"{name} RESOURCE_ID")
+def normalise_masters(m, name, warnings):
+    m["RESOURCE_ID"] = unmark_resources(m["RESOURCE_ID"], f"{name} RESOURCE_ID", warnings)
     for c in ["PART_ID", "ROLE", "REV", "OPERATION", "RESOURCE_ID", "RUN_TYPE"]:
         m[c] = m[c].map(code)
+    for f in NUMERIC:
+        m[f] = to_number(m[f], f"{name} {f}")
     if "MASTER_OPS_ROWID" not in m:
         m["MASTER_OPS_ROWID"] = pd.NA
     return m
@@ -682,28 +708,57 @@ def fates_since_last(prev, d, lst, stale_wos):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--drift", type=Path, default=PRIVATE_DIR / "data" / "drift.xlsx")
-    ap.add_argument("--masters", type=Path, default=PRIVATE_DIR / "data" / "masters.xlsx")
+    ap.add_argument("--no-extract", action="store_true",
+                    help="build from the last extract in <repo>_private\\data instead of querying the ERP")
+    ap.add_argument("--config", type=Path, default=PRIVATE_DIR / "extract.ini",
+                    help="database settings for the extract (default: <repo>_private\\extract.ini)")
+    ap.add_argument("--drift", type=Path, help="manual route: an export of master_drift.sql (.xlsx or .parquet)")
+    ap.add_argument("--masters", type=Path, help="manual route: an export of old_revision_masters.sql")
     ap.add_argument("--out", type=Path, help="default: <repo>_private\\outputs\\master_drift_list_<today>.xlsx")
     ap.add_argument("--previous", type=Path,
                     help="list to compare with (default: the most recently saved one in outputs)")
     a = ap.parse_args()
 
-    for p in (a.drift, a.masters):
-        if not p.exists():
-            sys.exit(f"input not found: {p}")
+    warnings = []
+    data = PRIVATE_DIR / "data"
+    if a.drift or a.masters:
+        if not (a.drift and a.masters):
+            sys.exit("--drift and --masters go together")
+        for p in (a.drift, a.masters):
+            if not p.exists():
+                sys.exit(f"input not found: {p}")
+        drift_day = datetime.fromtimestamp(a.drift.stat().st_mtime).date()
+        masters_day = datetime.fromtimestamp(a.masters.stat().st_mtime).date()
+        if drift_day != masters_day:
+            warnings.append(f"inputs saved on different days ({drift_day} / {masters_day}) - "
+                            "masters change; rerun both queries together")
+        source = "manual exports"
+    else:
+        if not a.no_extract:
+            import extract   # the database route; needs pyodbc and pyarrow
+            if tuple(extract.QUERIES) != EXTRACT_QUERIES:
+                sys.exit(f"extract.QUERIES {extract.QUERIES} and EXTRACT_QUERIES {EXTRACT_QUERIES} disagree")
+            extract.extract(data, a.config)
+        a.drift, a.masters = (data / f"{Path(q).stem}.parquet" for q in EXTRACT_QUERIES)
+        manifest_path = data / "extract_manifest.json"
+        if not (a.drift.exists() and a.masters.exists() and manifest_path.exists()):
+            sys.exit(f"no extract in {data} - run without --no-extract")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        changed = [q for q in EXTRACT_QUERIES if manifest["queries"][q]["sql_sha256"] != query_sha256(q)]
+        if changed:
+            warnings.append(f"{', '.join(changed)} changed since the extract of {manifest['started']} - "
+                            "run without --no-extract")
+        source = f"extract of {manifest['started']}"
     out = a.out or PRIVATE_DIR / "outputs" / f"master_drift_list_{datetime.now():%Y-%m-%d}.xlsx"
     if REPO_DIR in out.resolve().parents:
         sys.exit(f"refusing to write {out} inside the repo - the list names real parts and orders")
     out.parent.mkdir(parents=True, exist_ok=True)
-    drift_day = datetime.fromtimestamp(a.drift.stat().st_mtime).date()
-    masters_day = datetime.fromtimestamp(a.masters.stat().st_mtime).date()
     if a.previous and not a.previous.exists():
         sys.exit(f"previous list not found: {a.previous}")
     prev_path = a.previous or find_previous(PRIVATE_DIR / "outputs", out)
 
-    d = normalise_drift(load(a.drift, DRIFT_COLUMNS), a.drift.name)
-    m = normalise_masters(load(a.masters, MASTER_COLUMNS), a.masters.name)
+    d = normalise_drift(load(a.drift, DRIFT_COLUMNS), a.drift.name, warnings)
+    m = normalise_masters(load(a.masters, MASTER_COLUMNS), a.masters.name, warnings)
 
     dup = int(d.duplicated(LINE_KEY).sum())
     if dup:
@@ -729,6 +784,7 @@ def main():
     not_in_export = int((l3.CATEGORY == "OWN_LINE_NOT_IN_EXPORT").sum()) if not l3.empty else 0
     summary = [
         ("Run", f"{datetime.now():%Y-%m-%d %H:%M}"),
+        ("Source", source),
         ("Drift input", f"{a.drift.name} ({datetime.fromtimestamp(a.drift.stat().st_mtime):%Y-%m-%d %H:%M})"),
         ("Masters input", f"{a.masters.name} ({datetime.fromtimestamp(a.masters.stat().st_mtime):%Y-%m-%d %H:%M})"),
         ("Previous list", f"{prev_path.name} ({datetime.fromtimestamp(prev_path.stat().st_mtime):%Y-%m-%d %H:%M})"
@@ -791,9 +847,8 @@ def main():
         print(f"{k:<80} {v}")
     print(f"\nwritten: {out}")
     status = 0
-    if drift_day != masters_day:
-        print(f"!! inputs saved on different days ({drift_day} / {masters_day}) - "
-              "masters change; rerun both queries together")
+    for w in warnings:
+        print(f"!! {w}")
         status = 2
     if not_extracted or not_in_export:
         print("!! masters export does not cover every older-revision line - "

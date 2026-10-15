@@ -6,6 +6,10 @@
 # master_drift.py on the 28 Sep exports matched the `fts` environment's run in
 # all 93,992 workbook cells (only the run timestamp differs).
 #
+# 2026-10-15: pyodbc and pyarrow added for the database route (extract.py), at
+# factory_planner's versions. On the same data the database route and the Excel
+# route gave the same list, 02_SinceLastList and summary counts.
+#
 # Reproduce:  pip install -r requirements-lock.txt   (on Python 3.12)
 # Regenerate: python -m pip list --format=freeze --exclude pip --exclude setuptools --exclude wheel
 #             (not `pip freeze`, which writes conda's packages as file:// paths)
@@ -14,6 +18,8 @@ numpy==2.5.3
 openpyxl==3.1.5
 packaging==26.3
 pandas==3.0.6
+pyarrow==26.0.0
+pyodbc==5.3.0
 python-dateutil==2.9.0.post0
 six==1.17.0
 tzdata==2026.4

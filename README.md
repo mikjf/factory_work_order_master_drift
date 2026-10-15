@@ -57,26 +57,48 @@ showed false differences and false "no master line" rows.
 
 ## Running it
 
-Every time, on the same day:
+One command, in the `fwomd` environment:
 
-| Step | What | Save as |
-|---|---|---|
-| 1 | run `master_drift.sql` | `..\factory_work_order_master_drift_private\data\drift.xlsx` |
-| 2 | run `old_revision_masters.sql` | `..\factory_work_order_master_drift_private\data\masters.xlsx` |
-| 3 | `python master_drift.py` (in the `fwomd` environment) | - |
+```
+python master_drift.py
+```
 
-Paste each query's result into the first sheet with its header row, and
-overwrite the previous files. Both queries must run on the same day: masters
-change.
+It runs both queries against the ERP through `extract.py`, then builds the
+list. Built the same way as `factory_planner`'s extract:
 
-Both queries write resource IDs as `RES:034`, not `034`: pasted into Excel, an
-ID with a leading zero turned into a number and lost the zero. The script
-strips exactly the `RES:` marker, so the list shows `034`, and it stops if a
-resource has no marker - an export from an older version of the query.
+- **Read-only, Windows login.** No user name or password is stored. Server
+  and database names are in `..\factory_work_order_master_drift_private\extract.ini`,
+  never in this repository:
+
+  ```
+  [database]
+  server = ...
+  database = ...
+  driver = ODBC Driver 18 for SQL Server
+  ```
+
+- **Both queries together, all or nothing.** The results are saved as
+  `master_drift.parquet` and `old_revision_masters.parquet` in
+  `..\factory_work_order_master_drift_private\data`, with
+  `extract_manifest.json` (when it ran, rows, columns, and a SHA-256 of each
+  query's text). The previous extract is replaced only once both succeeded.
+- **It gives way to ERP users.** If a read collides with someone saving in the
+  ERP, the read is cancelled, never their work, and retried up to three times.
+- **Text stays text.** Resource IDs such as `034` keep their leading zero -
+  pasting into Excel had turned them into `34`.
+
+`python master_drift.py --no-extract` builds the list again from the last
+extract without querying the ERP; it warns if a query file changed since.
+`python extract.py` runs only the extract.
+
+The manual route of Excel exports still works, for older exports:
+`--drift <file> --masters <file>`. It warns if the two were saved on different
+days, or if their resource IDs were turned into numbers. Exports of 13-14 Oct
+2026 carry resource IDs as `RES:034`; the marker is stripped.
 
 The list is written to
 `..\factory_work_order_master_drift_private\outputs\master_drift_list_<date>.xlsx`.
-`--drift`, `--masters`, `--out` and `--previous` override the paths.
+`--out`, `--previous` and `--config` override the paths.
 
 ### The SQL updater list
 
@@ -155,14 +177,14 @@ every earlier layout are still read.
 | Code | Meaning |
 |---|---|
 | 0 | clean |
-| 1 | stopped: an input is missing, an operation appears twice (a join fanned out), or the level 1 flags from the SQL disagree with the script's own recomputation |
-| 2 | the list was written, but something needs a look - explained on a `!!` line: the two exports come from different days, or the masters export does not cover every older-revision line |
+| 1 | stopped: the extract failed (the previous one is kept), an input is missing, an operation appears twice (a join fanned out), a numeric field holds text, or the level 1 flags from the SQL disagree with the script's own recomputation |
+| 2 | the list was written, but something needs a look - explained on a `!!` line: a query changed since the extract used (`--no-extract`), manual exports from different days or with resource IDs turned into numbers, or the masters result does not cover every older-revision line |
 
 The script refuses to write inside this repository.
 
 ## Data never goes in this repository
 
-The exports and the list name real parts, work orders and projects. They live
+The extracts, the exports and the list name real parts, work orders and projects. They live
 in the private folder next to this one, which is never a repository; the
 `.gitignore` and a commit hook keep data files out of here. Commit messages
 describe changes by shape, never by part, order, project or family.
@@ -184,3 +206,6 @@ Outside the Anaconda prompt, call the environment's Python by its full path
 `requirements.txt` holds floors and the proven versions;
 `requirements-lock.txt` pins every package `fwomd` was proven on
 (2026-09-28: identical output to the previous environment in every cell).
+
+The database route also needs Microsoft's **ODBC Driver 18 for SQL Server**
+installed on the machine (`pyodbc` talks to the database through it).
