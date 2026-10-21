@@ -733,7 +733,7 @@ def same_value(a, b, field):
     return norm(a) == norm(b)
 
 
-def fates_since_last(prev, d, lst, stale_wos):
+def fates_since_last(prev, d, lst, stale_wos, l3):
     """What happened to each line of the previous list that is not listed again unchanged.
 
     FATE, in this order:
@@ -746,7 +746,11 @@ def fates_since_last(prev, d, lst, stale_wos):
                                      the values it had; this export cannot tell a
                                      started step from a deleted one
       still listed, changed          listed again, with other differences
-      fixed - order updated          the order now carries the old master value
+      fixed - order updated          the order now carries the value the list
+                                     proposed (M or C)
+      not compared - current         the order is on an older revision that level 3
+        revision not paired          cannot pair with the current one: not listed,
+                                     but not known to match either
       fixed - master updated         the master now carries the order's old value
       fixed - both changed           order and master agree on a third value
       fixed - now matches            no longer differs (compared with the current
@@ -787,18 +791,23 @@ def fates_since_last(prev, d, lst, stale_wos):
         elif (w, s, op) in listed_now:
             fate = "still listed, changed"
         else:
-            r = d.loc[by_line[(w, s, op)]]
-            if tag == "C" or r.ON_CURRENT_ROUTING == 0:
-                # the reference is the current revision: the order fixed means
-                # it now carries the value the list proposed (tag C), else the
-                # line simply matches the current revision now
-                updated = tag == "C" and before and all(same_value(r[f"WO_{f}"], cv, f)
-                                                        for f, (_, cv) in before.items())
-                fate = "fixed - order updated" if updated else "fixed - now matches"
+            i = by_line[(w, s, op)]
+            r = d.loc[i]
+            # the order now carries the value the list proposed - whatever the
+            # revision did meanwhile (first corrections, 2026-10-21, landed
+            # while the part moved to a new revision)
+            updated = bool(before) and all(same_value(r[f"WO_{f}"], v, f) for f, (_, v) in before.items())
+            unknown = r.ON_CURRENT_ROUTING == 0 and not (i in l3.index and pd.notna(l3.at[i, "CUR_SEQUENCE_NO"]))
+            if updated:
+                fate = "fixed - order updated"
+            elif unknown:
+                # older revision, not paired with the current one: not listed,
+                # but not known to match either
+                fate = "not compared - current revision not paired"
+            elif tag == "C" or r.ON_CURRENT_ROUTING == 0:
+                fate = "fixed - now matches"
             elif not before:
                 fate = "fixed - now matches"
-            elif all(same_value(r[f"WO_{f}"], om, f) for f, (_, om) in before.items()):
-                fate = "fixed - order updated"
             elif all(same_value(r[f"M_{f}"], oo, f) for f, (oo, _) in before.items()):
                 fate = "fixed - master updated"
             else:
@@ -887,7 +896,7 @@ def main():
     by_name_listed = int(lst.STEP.map(seq_key).ne(lst.M_STEP.map(seq_key)).sum())
     prev = read_previous(prev_path) if prev_path else None
     stale_wos = stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else []
-    fates = fates_since_last(prev, d, lst, stale_wos)
+    fates = fates_since_last(prev, d, lst, stale_wos, l3)
     sql_written, sql_blank = add_sql_update(lst)   # lst is in its final order here
 
     not_extracted = int((l3.CATEGORY == "MASTERS_NOT_EXTRACTED").sum()) if not l3.empty else 0
