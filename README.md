@@ -21,7 +21,7 @@ old ones.
 | **Work order (WO)** | a production order, `TYPE = 'W'`, with its own copy of the master's operations |
 | **Revision** | a version of a part's master, held in the master's `LOT_ID`. A WO's `USER_8` says which revision it was built from; `PART_SITE.ENGINEERING_MSTR` says which one is current. Revision labels (`A`, `7`, `ZZ` ...) cannot be ordered - "older" means *different from the current one* |
 | **Open, not started** | WO status firmed or released (`F`, `R`), operation status `F` or `R`, and no labour ticket of any kind on the operation |
-| **Drift** | a value on the WO's operation that differs from the master it is compared with |
+| **Drift** | a value on the WO's operation that differs from the master it follows: its own master on the current revision, the **current** revision for an order on an older one (PM and SC, 2026-10-21) |
 
 Compared fields: planned resource, `RUN_TYPE`, `RUN`, `LOAD_SIZE_QTY`,
 `SETUP_HRS` and `USER_5` (planned crew; empty counts as 1). `RUN_HRS` and
@@ -43,7 +43,7 @@ Compared fields: planned resource, `RUN_TYPE`, `RUN`, `LOAD_SIZE_QTY`,
 |---|---|---|---|
 | **1** | each WO operation with the master of **its own revision**, as that master is today | same sequence and same operation name - exact, since the WO copied that revision line by line; failing that, the same name when it is unique in the master and in the order (master renumbered) | firm |
 | **2** | - | one row per WO built on an **older** revision than the current one: the routing itself changed, a planner reviews the whole order | firm |
-| **3** | older-revision WO operations with the **current** revision's master | a new revision usually inserts a step and shifts later ones, so sequence numbers do not match. Lines are paired only when the name is unique in both revisions, when all its occurrences carry the same values, or when each occurrence has its own resource. Everything else is reported as not compared | **firm where paired** (since 2026-10-21 the current revision is the reference, so these pairings drive the list): the order's line is matched exactly to its own revision, and the name is unambiguous in both revisions. The 'name repeats with different values' lines stay unpaired - to be reviewed |
+| **3** | older-revision WO operations with the **current** revision's master | a new revision usually inserts a step and shifts later ones, so sequence numbers do not match. Lines are paired only when the name is unique in both revisions, when all its occurrences carry the same values, or when each occurrence has its own resource. Everything else is reported as not compared | **firm where paired** - since 2026-10-21 the current revision is the reference, so these pairings drive the list for older-revision orders: the order's line is matched to its own revision (level 1), and the name is unambiguous in both revisions. The "name repeats with different values" lines stay unpaired - to be reviewed |
 
 ### When `USER_8` is out of date
 
@@ -52,8 +52,9 @@ while `USER_8` still names an older one. When every not-started line of an
 older-revision order matches the current master - sequence, operation name
 and every compared value - and they do not all match its own revision, the
 order is treated as being on the current revision: it is compared with the
-current master and listed on `07_StaleUser8`. Without this, such orders
-showed false differences and false "no master line" rows.
+current master and listed on `05_StaleUser8`. Without this, such orders
+showed false differences and false "no master line" rows. The rule counts
+only exact matches (same step and name), not lines paired by name.
 
 ## Running it
 
@@ -103,7 +104,7 @@ The list is written to
 ### The SQL updater list
 
 `01_SqlUpdater` holds one row per open, not-started line that does **not**
-simply match its master (lines that match are only counted).
+match the master it follows (lines that match are only counted).
 
 **Lines without a master line are not listed** (since 2026-10-21, after
 PM and SC): steps added to the order on the go - rework `S RIL ...`, samples -
@@ -199,11 +200,11 @@ every earlier layout are still read.
 
 | Sheet | Content |
 |---|---|
-| `00_Summary` | counts per scenario, checks, input files, what happened since the previous list |
+| `00_Summary` | counts per scenario, the lines not listed by reason (no master line; older revision not paired with the current one), lines paired by name, checks, input files, what happened since the previous list |
 | `01_SqlUpdater` | **the list**, with the update statements - see above |
-| `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed** (order updated / master updated / both changed / now matches), **started, closed or removed** (mostly produced on the values it had - the export cannot tell a started step from a deleted one), **step replaced by another operation** (same step number, another operation name: removed or renamed, not fixed), still listed but changed, or moved by the `USER_8` rule. Shows whether the list is acted on |
+| `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed - order updated** (the order now carries the value the list proposed), fixed - master updated / both changed / now matches, **started, closed or removed** (mostly produced on the values it had - the export cannot tell a started step from a deleted one), **step replaced by another operation** (same step number, another operation name: removed or renamed, not fixed), **not compared - current revision not paired** (an older-revision order level 3 cannot pair: not listed, but not known to match), still listed but changed, or moved by the `USER_8` rule. Lines of scenarios no longer listed are not followed up. Shows whether the list is acted on |
 | `03_OldRevisionWOs` | level 2, one row per work order on an older revision, with its level 1 and level 3 counts |
-| `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current master's values (`CUR_*`, `D3_*`) |
+| `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current revision's values (`CUR_*`, `D3_*`) - the basis of `Work order to update (current revision)` |
 | `05_StaleUser8` | orders moved onto the current routing because `USER_8` is out of date, with what they showed before |
 
 ### Exit codes and checks

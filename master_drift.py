@@ -113,7 +113,7 @@ DRIFT_COLUMNS = (
     + [f"WO_{f}" for f in FIELDS] + [f"M_{f}" for f in FIELDS]
     + [f"D_{s}" for _, s in FIELDS.values()]
 )
-# MASTER_OPS_ROWID is optional in masters.xlsx: exports before 2026-10-12 lack it
+# MASTER_OPS_ROWID is optional in the masters input: exports before 2026-10-12 lack it
 MASTER_COLUMNS = ["PART_ID", "ROLE", "REV", "MASTER_EXISTS", "SEQUENCE_NO", "OPERATION"] + list(FIELDS)
 
 
@@ -591,7 +591,7 @@ def build_list(d, l3):
             "WO_CREATE_DATE": pd.to_datetime(r.CREATE_DATE).date(),
             "WO_DESIRED_RLS_DATE": pd.to_datetime(r.DESIRED_RLS_DATE).date(),
             "OPERATION": r.OPERATION, "STEP": r.OPERATION_SEQUENCE,
-            # the master's step: differs from STEP when paired by name
+            # the own master's step: differs from STEP when paired by name
             "M_STEP": int(r.M_SEQUENCE_NO) if pd.notna(r.M_SEQUENCE_NO) else pd.NA,
             "WO_REV": r.WO_REV, "M_REV": r.CURRENT_REV if r.USER_8_STALE == 1 else r.WO_REV,
             "C_REV": r.CURRENT_REV,
@@ -984,8 +984,8 @@ def main():
         print(f"!! {w}")
         status = 2
     if not_extracted or not_in_export:
-        print("!! masters export does not cover every older-revision line - "
-              "check both queries ran on the same day with the same scope")
+        print("!! the masters result does not cover every older-revision line - "
+              "check both queries ran together and keep the same work-order scope")
         status = 2
     return status
 

@@ -4,12 +4,14 @@
 -- unreleased work orders - was deleted on 2026-09-28; it stays in git
 -- history.
 --
--- For every part with an open work order on an OLDER revision than today's
--- (WO.USER_8 <> PART_SITE.ENGINEERING_MSTR), every master operation of:
+-- For every part with an open work order on an OLDER revision than the
+-- current one (WO.USER_8 <> PART_SITE.ENGINEERING_MSTR), every master
+-- operation of:
 --   ROLE 'OWN' = the revision the work order was built from (WO.USER_8)
---   ROLE 'CUR' = the part's current revision (ENGINEERING_MSTR)
--- one row per master operation. master_drift.py reads this next to the
--- output of master_drift.sql. Run both on the same day - masters change.
+--   ROLE 'CUR' = the part's current revision (ENGINEERING_MSTR) - since
+--                2026-10-21 the reference for those orders (PM and SC)
+-- one row per master operation. extract.py runs it together with
+-- master_drift.sql, in the same minute - masters change.
 --
 -- MASTER_EXISTS = 0: no TYPE 'M' row for that revision (then no operations).
 -- A work order with USER_8 NULL gives an 'OWN' row with REV NULL and

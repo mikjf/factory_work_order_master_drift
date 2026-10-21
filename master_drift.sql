@@ -1,4 +1,6 @@
--- Master drift - FIRST DRAFT, 2026-09-28. READ-ONLY (SELECT only).
+-- Master drift - level 1, since 2026-09-28. READ-ONLY (SELECT only).
+-- Run by extract.py (read-only connection) together with
+-- old_revision_masters.sql; never edited for Excel's sake.
 -- One row per open, not-started work-order operation, with the work order's
 -- copy and its own revision's master side by side, and one flag per field.
 -- This is LEVEL 1 of master drift; levels 2 and 3 are built by
@@ -21,18 +23,21 @@
 -- 2026-09-28 with the same sequence + name matching: it paired only 508 of
 -- 1,401 older-revision lines, because a new revision inserts a step and
 -- shifts every later step down one slot. Cross-revision pairing needs rules
--- SQL expresses badly, so it lives in master_drift.py (level 3).
+-- SQL expresses badly, so it lives in master_drift.py (level 3). Since
+-- 2026-10-21 (PM and SC) the CURRENT revision is the reference for an order
+-- on an older revision; this query still delivers the own-revision side.
 --
--- STILL OPEN (see the private OPEN_QUESTIONS.md) - this draft will change:
+-- SETTLED:
 --   - "not started" = WO status F/R, op status F/R, no labour ticket.
 --     U work orders are out (user, 2026-09-28): probe 3 showed them to be
 --     old orders, none with a ticket in 2026.
 --   - PART_SITE joined on PART_ID only; probe 2a (2026-09-28) found one row
 --     per part, so no fan-out today.
---   - O.RESOURCE_ID assumed to be the PLANNED resource (VISUAL naming,
---     unconfirmed). It ran on 2026-09-28.
+-- ASSUMED, watched by master_drift.py:
+--   - O.RESOURCE_ID is the PLANNED resource (VISUAL naming, unconfirmed).
 --   - Master looked up by PART_ID + LOT_ID + TYPE, as fts.sql does; if a
---     master can have several SPLIT/SUB rows this fans out.
+--     master can have several SPLIT/SUB rows this fans out - the script
+--     stops on a duplicate operation key.
 
 SELECT
     WO.BASE_ID                  AS WORK_ORDER,
@@ -54,7 +59,7 @@ SELECT
     WO.USER_8                   AS WO_REV,
     PS.ENGINEERING_MSTR         AS CURRENT_REV,
     -- Agreed: a WO on an older revision is its own category (routing changed),
-    -- listed apart. 1 = built from today's master revision.
+    -- listed apart. 1 = built from the current master revision.
     CASE WHEN WO.USER_8 = PS.ENGINEERING_MSTR THEN 1 ELSE 0 END
                                 AS ON_CURRENT_REV,
     WO.CREATE_DATE,
@@ -137,10 +142,11 @@ INNER JOIN dbo.OPERATION AS O
     AND O.WORKORDER_SPLIT_ID = WO.SPLIT_ID
     AND O.WORKORDER_SUB_ID   = WO.SUB_ID
     AND O.WORKORDER_TYPE     = WO.TYPE
--- only to show today's revision next to the WO's own one
+-- the current revision, next to the WO's own one
 LEFT JOIN dbo.PART_SITE AS PS
     ON PS.PART_ID = P.ID
--- the master of the WO's OWN revision (agreed), not today's master
+-- the master of the WO's OWN revision (agreed); the current one comes from
+-- old_revision_masters.sql
 LEFT JOIN dbo.WORK_ORDER AS WO_M
     ON  WO_M.PART_ID = WO.PART_ID
     AND WO_M.LOT_ID  = WO.USER_8
