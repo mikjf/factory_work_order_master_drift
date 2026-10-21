@@ -185,6 +185,17 @@ def normalise_drift(d, name, warnings):
     # WORKORDER_OPS_ROWID is optional: exports before 2026-10-12 lack it
     if "WORKORDER_OPS_ROWID" not in d:
         d["WORKORDER_OPS_ROWID"] = pd.NA
+    # pairing by unique name (2026-10-21): exports before it paired by
+    # sequence + name only, and did not say why a line had no master line
+    matched = d.NO_MASTER_LINE == 0
+    if "MATCHED_BY" not in d:
+        d["MATCHED_BY"] = pd.Series("SEQUENCE", index=d.index).where(matched)
+    if "M_SEQUENCE_NO" not in d:
+        d["M_SEQUENCE_NO"] = d.OPERATION_SEQUENCE.where(matched)
+    if "NO_MASTER_REASON" not in d:
+        d["NO_MASTER_REASON"] = pd.Series("UNKNOWN (export before 2026-10-21)", index=d.index).where(~matched)
+    d["MATCHED_BY"] = d.MATCHED_BY.map(code)
+    d["NO_MASTER_REASON"] = d.NO_MASTER_REASON.map(code)
     for c in ["WO_RESOURCE_ID", "M_RESOURCE_ID"]:
         d[c] = unmark_resources(d[c], f"{name} {c}", warnings)
     for c in ["WO_REV", "CURRENT_REV", "OPERATION", "WO_KIND", "WO_STATUS", "OP_STATUS", "PART_ID"]:
@@ -234,7 +245,10 @@ def apply_stale_user8(d, m):
         c = cur[(cur.PART_ID == w.PART_ID.iloc[0]) & (cur.REV == w.CURRENT_REV.iloc[0])][cur_cols]
         if c.empty or c.duplicated(["SEQUENCE_NO", "OPERATION"]).any():
             continue
-        own_all = bool(((w.NO_MASTER_LINE == 0) & (w[flags].fillna(0).max(axis=1) == 0)).all())
+        # exact matches only: a line paired by name (renumbered master) does
+        # not count as "consistent with its own revision" here - otherwise
+        # pairing by name (2026-10-21) would stop recognising stale labels
+        own_all = bool(((w.MATCHED_BY == "SEQUENCE") & (w[flags].fillna(0).max(axis=1) == 0)).all())
         if own_all:
             continue    # consistent with its own revision - the label may well be right
         j = w.reset_index().merge(c.add_prefix("CUR_"), how="left",
@@ -252,7 +266,10 @@ def apply_stale_user8(d, m):
             v = j[f"CUR_{f}"]
             d.loc[j.index, f"M_{f}"] = v if text else pd.to_numeric(v, errors="coerce").astype(float)
         d.loc[j.index, "MASTER_OPS_ROWID"] = pd.to_numeric(j["CUR_MASTER_OPS_ROWID"], errors="coerce").astype(float)
+        d.loc[j.index, "M_SEQUENCE_NO"] = pd.to_numeric(j["CUR_SEQUENCE_NO"], errors="coerce").astype(float)
         d.loc[j.index, "NO_MASTER_LINE"] = 0
+        d.loc[j.index, "MATCHED_BY"] = "SEQUENCE"
+        d.loc[j.index, "NO_MASTER_REASON"] = None
         d.loc[j.index, flags] = 0
         d.loc[j.index, ["USER_8_STALE", "ON_CURRENT_ROUTING"]] = 1
         first = w.iloc[0]
@@ -304,7 +321,8 @@ def level3(d, m):
         elif cur is None:
             rec["CATEGORY"] = "NO_CURRENT_MASTER"
         else:
-            hit = own[(own.SEQUENCE_NO == r.OPERATION_SEQUENCE) & (own.OPERATION == r.OPERATION)]
+            # the master's own step: differs from the WO's when paired by name
+            hit = own[(own.SEQUENCE_NO == r.M_SEQUENCE_NO) & (own.OPERATION == r.OPERATION)]
             if len(hit) != 1:
                 # the SQL matched it, so the export must contain it exactly once
                 rec["CATEGORY"] = "OWN_LINE_NOT_IN_EXPORT"
@@ -358,9 +376,12 @@ def level2(d, l3):
 # THE DRIFT LIST (agreed with the user, 2026-10-12)
 #
 # One row per open, not-started work-order line that does NOT simply match
-# its master. Each row has exactly one SCENARIO, decided in this order:
-#   No master line            no own-revision master line to compare with
-#                             (a step added to the order: rework, test samples)
+# its master. A line WITHOUT a master line is not listed, only counted by
+# reason (user, 2026-10-21, after PM and SC: steps added to the order on the
+# go - rework S RIL ..., samples - have nothing to compare with). A line
+# whose step was renumbered in the master is paired by name in the SQL
+# (MATCHED_BY = UNIQUE_NAME) and listed like any other; M_STEP then differs
+# from STEP. Each row has exactly one SCENARIO, decided in this order:
 #   Work order matches current master
 #                             an older-revision line that differs from its own
 #                             old revision, while every value equals the
@@ -403,7 +424,14 @@ SCENARIOS = {  # key -> shown name; dict order = sort order of the list
     "check": "Resource changed",
     "today": "Differs from current master (WO on older revision)",
     "info": "Work order matches current master",
-    "nomaster": "No master line",
+}
+# the scenario of lists before 2026-10-21; 02_SinceLastList skips its lines
+OLD_NOMASTER = "No master line"
+# NO_MASTER_REASON -> how the summary names the unlisted lines
+NO_MASTER_REASONS = {
+    "NOT_IN_MASTER": "step not in the master (added to the order on the go)",
+    "NAME_NOT_UNIQUE": "name repeats in the master or the order (not paired)",
+    "NO_MASTER": "no master for the order's revision",
 }
 LIST_SHEET = "01_SqlUpdater"
 # older workbooks still read for 02_SinceLastList
@@ -421,7 +449,7 @@ VALUE_COLUMNS = (
     + [f"{p}_{s}" for s in ("LSQ", "SETUP_HRS", "CREW") for p in ("WO", "M", "C")])
 LIST_COLUMNS = (
     ["WO_OPS_ROWID", "M_OPS_ROWID", "C_MASTER_OPS_ROWID", "FAMILY", "PART_ID", "PART_DESCRIPTION",
-     "WO", "WO_STATUS", "WO_CREATE_DATE", "WO_DESIRED_RLS_DATE", "OPERATION", "STEP",
+     "WO", "WO_STATUS", "WO_CREATE_DATE", "WO_DESIRED_RLS_DATE", "OPERATION", "STEP", "M_STEP",
      "WO_REV", "M_REV", "C_REV"]
     + VALUE_COLUMNS
     + ["DIFF_KEY", "SCENARIO", "SQL_UPDATE"])
@@ -476,16 +504,22 @@ def canonical_diff(diff_key):
 
 
 def build_list(d, l3):
-    """The drift list: one row per line that does not match its master. See above."""
+    """The drift list: one row per line that does not match its master. See above.
+
+    Returns (list, lines matching their master, {NO_MASTER_REASON: lines not
+    listed because they have no master line}).
+    """
     flags = {f: f"D_{s}" for f, (_, s) in FIELDS.items()}
-    rows, matching = [], 0
+    rows, matching, no_line_lines = [], 0, {}
     for idx, r in zip(d.index, d.itertuples(index=False)):
-        compared = idx in l3.index and pd.notna(l3.at[idx, "CUR_SEQUENCE_NO"])
-        own = [f for f in FIELDS if getattr(r, flags[f]) == 1] if r.NO_MASTER_LINE == 0 else []
-        today = [f for f, (_, s) in FIELDS.items() if compared and l3.at[idx, f"D3_{s}"] == 1]
         if r.NO_MASTER_LINE == 1:
-            key, pairs = "nomaster", {}
-        elif own and compared and not today:
+            reason = r.NO_MASTER_REASON or "UNKNOWN"
+            no_line_lines[reason] = no_line_lines.get(reason, 0) + 1
+            continue
+        compared = idx in l3.index and pd.notna(l3.at[idx, "CUR_SEQUENCE_NO"])
+        own = [f for f in FIELDS if getattr(r, flags[f]) == 1]
+        today = [f for f, (_, s) in FIELDS.items() if compared and l3.at[idx, f"D3_{s}"] == 1]
+        if own and compared and not today:
             key, pairs = "info", {f: (shown(getattr(r, f"WO_{f}")), shown(getattr(r, f"M_{f}"))) for f in own}
         elif own:
             key = "check" if "RESOURCE_ID" in own else "update"
@@ -499,18 +533,19 @@ def build_list(d, l3):
         # current master: the line itself for an order on (or moved onto) the
         # current routing, the level 3 pairing for an older revision
         on_current = r.ON_CURRENT_ROUTING == 1
-        no_line = r.NO_MASTER_LINE == 1
         rec = {
             "_S": list(SCENARIOS).index(key), "_DIFF": list(pairs),
             "WO_OPS_ROWID": r.WORKORDER_OPS_ROWID,
-            "M_OPS_ROWID": pd.NA if no_line else r.MASTER_OPS_ROWID,
-            "C_MASTER_OPS_ROWID": (pd.NA if no_line else r.MASTER_OPS_ROWID) if on_current else
+            "M_OPS_ROWID": r.MASTER_OPS_ROWID,
+            "C_MASTER_OPS_ROWID": r.MASTER_OPS_ROWID if on_current else
                                   (l3.at[idx, "CUR_MASTER_OPS_ROWID"] if compared else pd.NA),
             "FAMILY": r.FAMILY, "PART_ID": r.PART_ID, "PART_DESCRIPTION": r.PART_DESCRIPTION,
             "WO": r.WORK_ORDER, "WO_STATUS": r.WO_STATUS,
             "WO_CREATE_DATE": pd.to_datetime(r.CREATE_DATE).date(),
             "WO_DESIRED_RLS_DATE": pd.to_datetime(r.DESIRED_RLS_DATE).date(),
             "OPERATION": r.OPERATION, "STEP": r.OPERATION_SEQUENCE,
+            # the master's step: differs from STEP when paired by name
+            "M_STEP": int(r.M_SEQUENCE_NO) if pd.notna(r.M_SEQUENCE_NO) else pd.NA,
             "WO_REV": r.WO_REV, "M_REV": r.CURRENT_REV if r.USER_8_STALE == 1 else r.WO_REV,
             "C_REV": r.CURRENT_REV,
             "DIFF_KEY": make_diff_key(pairs, "C" if key == "today" else "M"),
@@ -518,12 +553,12 @@ def build_list(d, l3):
         }
         for f, s in SHORT.items():
             rec[f"WO_{s}"] = getattr(r, f"WO_{f}")
-            rec[f"M_{s}"] = pd.NA if no_line else getattr(r, f"M_{f}")
+            rec[f"M_{s}"] = getattr(r, f"M_{f}")
             rec[f"C_{s}"] = (rec[f"M_{s}"] if on_current else
                              l3.at[idx, f"CUR_{f}"] if compared else pd.NA)
         rows.append(rec)
     x = pd.DataFrame(rows, columns=["_S", "_DIFF"] + LIST_COLUMNS)
-    return x.sort_values(["_S", "OPERATION", "WO", "STEP"]).reset_index(drop=True), matching
+    return x.sort_values(["_S", "OPERATION", "WO", "STEP"]).reset_index(drop=True), matching, no_line_lines
 
 
 def add_sql_update(lst):
@@ -678,7 +713,9 @@ def fates_since_last(prev, d, lst, stale_wos):
     stale = {code(w) for w in stale_wos}
     rows = []
     for (w, s, op, dk), scen in zip(line_key(prev, "SEQ"), prev.SCENARIO):
-        if (w, s, op, dk) in current:
+        # lines without a master line are no longer listed (2026-10-21): what
+        # became of them in an older list is not followed up
+        if (w, s, op, dk) in current or str(scen) == OLD_NOMASTER:
             continue
         before = parse_diff_key(dk)
         now = ""
@@ -771,10 +808,13 @@ def main():
 
     l3 = level3(d, m)
     l2 = level2(d, l3)
-    lst, matching = build_list(d, l3)
-    if len(lst) + matching != len(d) or lst.duplicated(["WO", "STEP"]).any():
+    lst, matching, no_line_lines = build_list(d, l3)
+    no_line = sum(no_line_lines.values())
+    if len(lst) + matching + no_line != len(d) or lst.duplicated(["WO", "STEP"]).any():
         sys.exit(f"the list does not account for every line once: {len(lst)} listed + {matching} matching "
-                 f"vs {len(d)} lines")
+                 f"+ {no_line} without master line vs {len(d)} lines")
+    by_name = d[(d.MATCHED_BY == "UNIQUE_NAME") & (d.NO_MASTER_LINE == 0)]
+    by_name_listed = int(lst.STEP.map(seq_key).ne(lst.M_STEP.map(seq_key)).sum())
     prev = read_previous(prev_path) if prev_path else None
     stale_wos = stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else []
     fates = fates_since_last(prev, d, lst, stale_wos)
@@ -795,6 +835,13 @@ def main():
         ("Open, not-started WO operations", len(d)),
         ("Work orders", d[WO_KEY].drop_duplicates().shape[0]),
         ("Lines matching their master (not listed)", matching),
+        ("Lines without a master line (not listed)", no_line),
+    ]
+    summary += [(f"   without master line - {NO_MASTER_REASONS.get(k, k)}", n)
+                for k, n in sorted(no_line_lines.items(), key=lambda kv: -kv[1])]
+    summary += [
+        ("Lines paired by unique name (step renumbered in the master)",
+         f"{len(by_name)} - of which listed with a difference: {by_name_listed}"),
         (f"Lines listed ({LIST_SHEET})", f"{len(lst)} lines, {lst.WO.nunique()} work orders"),
     ]
     for key, name in SCENARIOS.items():

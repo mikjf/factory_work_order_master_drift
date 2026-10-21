@@ -41,7 +41,7 @@ Compared fields: planned resource, `RUN_TYPE`, `RUN`, `LOAD_SIZE_QTY`,
 
 | Level | Compares | How lines are paired | Trust |
 |---|---|---|---|
-| **1** | each WO operation with the master of **its own revision**, as that master is today | same sequence and same operation name - exact, since the WO copied that revision line by line | firm |
+| **1** | each WO operation with the master of **its own revision**, as that master is today | same sequence and same operation name - exact, since the WO copied that revision line by line; failing that, the same name when it is unique in the master and in the order (master renumbered) | firm |
 | **2** | - | one row per WO built on an **older** revision than the current one: the routing itself changed, a planner reviews the whole order | firm |
 | **3** | older-revision WO operations with the **current** revision's master | a new revision usually inserts a step and shifts later ones, so sequence numbers do not match. Lines are paired only when the name is unique in both revisions, when all its occurrences carry the same values, or when each occurrence has its own resource. Everything else is reported as not compared | **indicative** - assumes the same name is the same step; to be reviewed |
 
@@ -103,12 +103,27 @@ The list is written to
 ### The SQL updater list
 
 `01_SqlUpdater` holds one row per open, not-started line that does **not**
-simply match its master (lines that match are only counted). Each row has
-exactly one `SCENARIO`, decided in this order:
+simply match its master (lines that match are only counted).
+
+**Lines without a master line are not listed** (since 2026-10-21, after
+PM and SC): steps added to the order on the go - rework `S RIL ...`, samples -
+have nothing to compare with. `00_Summary` counts them by reason: the step is
+not in the master; its name repeats in the master or the order, so it is not
+paired; or the order's revision has no master.
+
+**A step renumbered in the master is still compared.** A master can be
+renumbered after an order was created (a step inserted, the later ones moved
+by 100 or 200), so the order's step number is no longer in it. When the
+operation name occurs exactly once in the master and exactly once among all
+the order's operations, the query pairs the two lines by name
+(`MATCHED_BY = UNIQUE_NAME`); `M_STEP` then shows the master's step next to
+the order's `STEP`. Before, such lines showed as "no master line" and hid
+real differences.
+
+Each listed row has exactly one `SCENARIO`, decided in this order:
 
 | `SCENARIO` | Meaning | Basis |
 |---|---|---|
-| `No master line` | no master line to compare with - a step added to the order (rework `S RIL ...`, test samples) | not comparable |
 | `Work order matches current master` | an older-revision line that differs from its own old revision, while every value equals the current master | nothing to change on the order |
 | `Resource changed` | the resource differs from the master | 28 Sep review: 9 of 13 intentional, 4 not - always looked at |
 | `Work order to update` | same resource, another value differs | 28 Sep review: 51 of 51 - the order follows the master |
@@ -121,7 +136,7 @@ Columns, in order:
 | `WO_OPS_ROWID`, `M_OPS_ROWID`, `C_MASTER_OPS_ROWID` | the order's operation line, the master line it is compared with, the current master line |
 | `FAMILY`, `PART_ID`, `PART_DESCRIPTION` | which part |
 | `WO`, `WO_STATUS`, `WO_CREATE_DATE`, `WO_DESIRED_RLS_DATE` | which order |
-| `OPERATION`, `STEP` | which step (`STEP` = sequence number) |
+| `OPERATION`, `STEP`, `M_STEP` | which step: `STEP` = the order's sequence number, `M_STEP` = the master line's (different only when paired by name) |
 | `WO_REV`, `M_REV`, `C_REV` | the order's revision (`USER_8`), the one it is compared with, today's |
 | `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its master's and the current master's values side by side |
 | `DIFF_KEY` | what differs, each value tagged with its source, e.g. `RUN: 60 (WO) \| 70 (M); SETUP_HRS: 0 (WO) \| 1 (M)` - `(C)` for the current master on the "differs from current master" scenario. Also what recognises the line next time (the plain form of lists before 12 Oct 2026, `RUN=60\|70`, is still read) |

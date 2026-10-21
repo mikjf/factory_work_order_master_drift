@@ -12,7 +12,10 @@
 --                or the WO edited by hand.
 -- fts.sql calls the work order's copy "*_MASTER" - not here, on purpose.
 -- Matched like fts.sql: same SEQUENCE_NO AND same OPERATION_TYPE. Exact here,
--- because the WO copied its own revision line by line.
+-- because the WO copied its own revision line by line. Since 2026-10-21 a
+-- line whose sequence is no longer in the master is paired by name when the
+-- name is unique in the master and in the WO (MATCHED_BY = 'UNIQUE_NAME'):
+-- the master was renumbered in place after the WO was created.
 --
 -- NOT HERE: comparison with the CURRENT revision's master. Tried on
 -- 2026-09-28 with the same sequence + name matching: it paired only 508 of
@@ -86,10 +89,27 @@ SELECT
     -- by design.
 
     O_M.ROWID                   AS MASTER_OPS_ROWID,
-    -- 1 = no master line with this sequence AND this operation name in the
-    -- WO's own revision: the master changed shape, or the WO was edited.
+    O_M.SEQUENCE_NO             AS M_SEQUENCE_NO,
+    -- how the master line was found (2026-10-21, see the OUTER APPLY below):
+    -- SEQUENCE    same sequence and same name - the WO copied this line
+    -- UNIQUE_NAME the sequence differs (the master was renumbered after the
+    --             WO was created: a step inserted, later ones shifted), but
+    --             the name occurs exactly once in the master AND exactly once
+    --             among all operations of the WO, started ones included
+    O_M.MATCHED_BY,
+    -- 1 = no master line found either way
     CASE WHEN O_M.ROWID IS NULL THEN 1 ELSE 0 END
                                 AS NO_MASTER_LINE,
+    -- why not: NO_MASTER        no master for the WO's revision at all
+    --          NOT_IN_MASTER    the name is not in the master - a step added
+    --                           to the WO on the go (rework S RIL ..., samples)
+    --          NAME_NOT_UNIQUE  the name is in the master, but repeats in the
+    --                           master or in the WO - not paired, no guessing
+    CASE WHEN O_M.ROWID IS NOT NULL THEN NULL
+         WHEN WO_M.BASE_ID IS NULL  THEN 'NO_MASTER'
+         WHEN N_M.N = 0             THEN 'NOT_IN_MASTER'
+         ELSE 'NAME_NOT_UNIQUE'
+    END                         AS NO_MASTER_REASON,
 
     -- one flag per field; NULL = NULL counts as equal. Numbers are compared
     -- as numbers (a text compare gave false changes in FTS).
@@ -125,17 +145,48 @@ LEFT JOIN dbo.WORK_ORDER AS WO_M
     ON  WO_M.PART_ID = WO.PART_ID
     AND WO_M.LOT_ID  = WO.USER_8
     AND WO_M.TYPE    = 'M'
-LEFT JOIN dbo.OPERATION AS O_M
-    ON  O_M.WORKORDER_BASE_ID  = WO_M.BASE_ID
-    AND O_M.WORKORDER_LOT_ID   = WO_M.LOT_ID
-    AND O_M.WORKORDER_SPLIT_ID = WO_M.SPLIT_ID
-    AND O_M.WORKORDER_SUB_ID   = WO_M.SUB_ID
-    AND O_M.WORKORDER_TYPE     = WO_M.TYPE
-    AND O_M.SEQUENCE_NO        = O.SEQUENCE_NO
-    -- the master slot must still hold the SAME operation, as in fts.sql:
-    -- sequence alone can pair with a repurposed slot. A miss shows up as
-    -- NO_MASTER_LINE = 1 instead of a false comparison.
-    AND O_M.OPERATION_TYPE     = O.OPERATION_TYPE
+-- how often this operation name occurs in the master, and among ALL
+-- operations of the work order (any status: a rework copy of a step already
+-- done still counts)
+OUTER APPLY (
+    SELECT COUNT(*) AS N
+    FROM dbo.OPERATION AS X
+    WHERE X.WORKORDER_BASE_ID  = WO_M.BASE_ID
+      AND X.WORKORDER_LOT_ID   = WO_M.LOT_ID
+      AND X.WORKORDER_SPLIT_ID = WO_M.SPLIT_ID
+      AND X.WORKORDER_SUB_ID   = WO_M.SUB_ID
+      AND X.WORKORDER_TYPE     = WO_M.TYPE
+      AND X.OPERATION_TYPE     = O.OPERATION_TYPE
+) AS N_M
+OUTER APPLY (
+    SELECT COUNT(*) AS N
+    FROM dbo.OPERATION AS Y
+    WHERE Y.WORKORDER_BASE_ID  = O.WORKORDER_BASE_ID
+      AND Y.WORKORDER_LOT_ID   = O.WORKORDER_LOT_ID
+      AND Y.WORKORDER_SPLIT_ID = O.WORKORDER_SPLIT_ID
+      AND Y.WORKORDER_SUB_ID   = O.WORKORDER_SUB_ID
+      AND Y.WORKORDER_TYPE     = O.WORKORDER_TYPE
+      AND Y.OPERATION_TYPE     = O.OPERATION_TYPE
+) AS N_W
+-- the master line: same sequence AND same name first, as in fts.sql
+-- (sequence alone can pair with a repurposed slot). Failing that, the line
+-- with the same name - only when the name is unique on both sides (user,
+-- 2026-10-21: a renumbered master hid real differences as "no master line").
+OUTER APPLY (
+    SELECT TOP 1
+        X.ROWID, X.SEQUENCE_NO, X.RESOURCE_ID, X.RUN_TYPE, X.RUN,
+        X.LOAD_SIZE_QTY, X.SETUP_HRS, X.USER_5,
+        CASE WHEN X.SEQUENCE_NO = O.SEQUENCE_NO THEN 'SEQUENCE' ELSE 'UNIQUE_NAME' END AS MATCHED_BY
+    FROM dbo.OPERATION AS X
+    WHERE X.WORKORDER_BASE_ID  = WO_M.BASE_ID
+      AND X.WORKORDER_LOT_ID   = WO_M.LOT_ID
+      AND X.WORKORDER_SPLIT_ID = WO_M.SPLIT_ID
+      AND X.WORKORDER_SUB_ID   = WO_M.SUB_ID
+      AND X.WORKORDER_TYPE     = WO_M.TYPE
+      AND X.OPERATION_TYPE     = O.OPERATION_TYPE
+      AND (X.SEQUENCE_NO = O.SEQUENCE_NO OR (N_M.N = 1 AND N_W.N = 1))
+    ORDER BY CASE WHEN X.SEQUENCE_NO = O.SEQUENCE_NO THEN 0 ELSE 1 END
+) AS O_M
 WHERE WO.TYPE = 'W'
   AND WO.STATUS IN ('F', 'R')
   -- not closed / cancelled / unreleased. Probe 1b: F/F 2,836 ops, R/R 7,252.
