@@ -17,19 +17,21 @@ were saved on different days, or if their resource IDs lost leading zeros.
 Output: <repo>_private\\outputs\\master_drift_list_<date>.xlsx by default,
 never inside this repo - it names real parts and orders:
   00_Summary          counts per scenario, checks, since last list
-  01_SqlUpdater       THE list: one row per line that does not match its
-                      master - the ROWIDs, part, order, step, revisions, the
-                      order's (WO_) / master's (M_) / current master's (C_)
-                      values, SCENARIO, SQL_UPDATE (an UPDATE on the order's
-                      operation, "Work order to update" lines only) -
-                      see THE DRIFT LIST and THE SQL UPDATER below
+  01_SqlUpdater       THE list: one row per line that does not match the
+                      master it follows (its own; the current revision for an
+                      order on an older one) - the ROWIDs, part, order, step,
+                      revisions, the order's (WO_) / master's (M_) / current
+                      revision's (C_) values, SCENARIO, SQL_UPDATE (an UPDATE
+                      on the order's operation, both "Work order to update"
+                      scenarios) - see THE DRIFT LIST and THE SQL UPDATER below
   02_SinceLastList    what happened to each line of the previous list that is
                       not listed again unchanged: fixed (order / master
                       updated), started on the old values, or the step
                       replaced - see fates_since_last() (user, 2026-10-12)
   03_OldRevisionWOs   LEVEL 2: one row per WO built on an older revision
-  04_CrossRevision    LEVEL 3 (INDICATIVE): older-revision WO lines against
-                      the CURRENT revision's master
+  04_CrossRevision    LEVEL 3: older-revision WO lines against the CURRENT
+                      revision's master - since 2026-10-21 the reference for
+                      those orders (PM and SC)
   05_StaleUser8       work orders whose USER_8 names an older revision while
                       their routing is the current one (see below)
 
@@ -59,7 +61,11 @@ unique evidence; everything else is reported as NOT_COMPARED:
   BY_RESOURCE            the name repeats, each occurrence on its own
                          resource, same resource set in both revisions
   NOT_IN_CURRENT         the name does not occur in the current revision
-The standing assumption is "same name = same step". It is not proven.
+The standing assumption is "same name = same step". Each pairing starts from
+the order's line matched to its own revision (by step and name, or by a name
+unique in master and order), and the name must be unambiguous in both
+revisions. Still to review: the NOT_COMPARED lines (a name
+that repeats with different values) - counted, not listed.
 """
 
 import argparse
@@ -381,52 +387,78 @@ def level2(d, l3):
 # go - rework S RIL ..., samples - have nothing to compare with). A line
 # whose step was renumbered in the master is paired by name in the SQL
 # (MATCHED_BY = UNIQUE_NAME) and listed like any other; M_STEP then differs
-# from STEP. Each row has exactly one SCENARIO, decided in this order:
-#   Work order matches current master
-#                             an older-revision line that differs from its own
-#                             old revision, while every value equals the
-#                             current master (level 3 paired it)
-#   Resource changed          the resource differs (28 Sep review: 9 of 13
-#                             intentional, 4 not - always looked at)
-#   Work order to update      same resource, another value differs (28 Sep
-#                             review: 51 of 51 - the order follows the master)
-#   Differs from current master (WO on older revision)
-#                             matches its own old revision, but level 3 found
-#                             a different value in the current master
-#                             (indicative: cross-revision pairing)
-# Lines that match their master are counted, not listed. DIFF_KEY names
-# exactly what differs, each value tagged (WO) / (M) / (C).
+# from STEP.
+#
+# THE REFERENCE IS THE CURRENT REVISION (PM and SC, 2026-10-21): an order
+# created on an older revision follows the CURRENT revision of the master -
+# the one PART_SITE.ENGINEERING_MSTR names - not the one it was created from.
+# Their two examples: an order still carrying its old revision's rate is
+# brought to the current one; an order that already carries the current rate
+# stays as it is, although its old revision said otherwise.
+#   - An order on the current revision (or moved onto it by the stale-USER_8
+#     rule) is compared with its master line (M_), paired exactly.
+#   - An order on an older revision is compared with the current revision
+#     (C_), through the level 3 pairing: unique name, identical occurrences or
+#     own resource - each a pairing of the order's EXACT own-revision line
+#     with one current line. Lines level 3 cannot pair are counted by
+#     category, not listed: their current value is unknown.
+# Each row has exactly one SCENARIO:
+#   Work order to update      order on the current revision; same resource,
+#                             another value differs (28 Sep review: 51 of 51 -
+#                             the order follows the master)
+#   Work order to update (current revision)
+#                             order on an older revision; same resource,
+#                             another value differs from the current revision
+#   Resource changed          the resource differs from the master compared
+#                             with (28 Sep review: 9 of 13 intentional; SC,
+#                             2026-10-21: "should be" intentional - kept)
+# Lines that match are counted, not listed. DIFF_KEY names exactly what
+# differs, each value tagged (WO) / (M) / (C) - (C) for an older-revision
+# order. Until 2026-10-21 there were also "Differs from current master (WO on
+# older revision)" - now "Work order to update (current revision)" - and
+# "Work order matches current master" - now not listed: correct as it is.
 #
 # THE SQL UPDATER (user, 2026-10-12). The list is laid out as the user asked,
 # FTS-updater style: per line the order's (WO_), its master's (M_) and the
-# current master's (C_) values side by side, and SQL_UPDATE - a spreadsheet FORMULA
-# that builds an UPDATE on the work-order operation (WO_OPS_ROWID) from the M_
-# cells of its own row, so correcting a value corrects the statement.
-#   - only on "Work order to update": the other scenarios need a person
-#     (resource), are indicative (current master), or have nothing to copy;
-#   - the value is M_, the master the line was compared with (exact pairing by
-#     sequence + name), never C_ on an older revision (indicative pairing);
-#   - it sets only the fields that differ; never RESOURCE_ID (a "Work order to
-#     update" line has the same resource by definition);
+# current revision's (C_) values side by side, and SQL_UPDATE - a spreadsheet
+# FORMULA that builds an UPDATE on the work-order operation (WO_OPS_ROWID)
+# from the cells of its own row, so correcting a value corrects the statement.
+#   - on both "Work order to update" scenarios; "Resource changed" needs a
+#     person;
+#   - the value is the one compared with: M_ on "Work order to update", C_
+#     on "Work order to update (current revision)";
+#   - it sets only the fields that differ; never RESOURCE_ID (an update line
+#     has the same resource by definition), never the step number;
 #   - empty when a master value or the ROWID is blank, so nothing can blank a
 #     field by accident. Nothing here runs anything.
 # The cells of each difference in DIFF_KEY are coloured (user, 2026-10-13):
-# the order's value (WO_) orange, the value it is compared with green - M_, or
-# C_ on "Differs from current master". "Work order to update" rows are light
-# grey across the row underneath. Fills are fixed at writing time; they do
-# not follow edits made in the sheet.
-# M_REV is the revision the line was compared with (= C_REV for an order moved
-# by the stale-USER_8 rule). For orders on the current revision C_ = M_.
+# the order's value (WO_) orange, the value it is compared with green (M_ or
+# C_, as tagged). Both "Work order to update" scenarios are grey across
+# the row underneath. Fills are fixed at writing time; they do not follow
+# edits made in the sheet.
+# M_ / M_REV: the order's own revision (= C_REV for an order moved by the
+# stale-USER_8 rule). For orders on the current revision C_ = M_.
 # ---------------------------------------------------------------------------
 
 SCENARIOS = {  # key -> shown name; dict order = sort order of the list
     "update": "Work order to update",
+    "update_cur": "Work order to update (current revision)",
     "check": "Resource changed",
-    "today": "Differs from current master (WO on older revision)",
-    "info": "Work order matches current master",
 }
-# the scenario of lists before 2026-10-21; 02_SinceLastList skips its lines
-OLD_NOMASTER = "No master line"
+UPDATE_SCENARIOS = ("update", "update_cur")   # get SQL_UPDATE and the grey row
+# scenarios of earlier lists, still read by 02_SinceLastList
+OLD_NOMASTER = "No master line"                                       # until 2026-10-21
+OLD_CUR_SCENARIOS = ("Differs from current master (WO on older revision)", "Differs from today's master",
+                     "Work order matches current master")             # until 2026-10-21
+# level 3 CATEGORY -> how the summary names older-revision lines it could not
+# pair with the current revision (counted, not listed)
+UNPAIRED = {
+    "NOT_COMPARED": "name repeats with different values (not paired)",
+    "NOT_IN_CURRENT": "step no longer in the current revision",
+    "NO_CURRENT_MASTER": "no master for the current revision",
+    "MASTERS_NOT_EXTRACTED": "masters not in the extract",
+    "OWN_LINE_NOT_IN_EXPORT": "own master line not in the extract",
+}
 # NO_MASTER_REASON -> how the summary names the unlisted lines
 NO_MASTER_REASONS = {
     "NOT_IN_MASTER": "step not in the master (added to the order on the go)",
@@ -504,37 +536,52 @@ def canonical_diff(diff_key):
 
 
 def build_list(d, l3):
-    """The drift list: one row per line that does not match its master. See above.
+    """The drift list: one row per line that does not match the master it
+    follows - its own on the current revision, the current one otherwise.
+    See THE DRIFT LIST above.
 
-    Returns (list, lines matching their master, {NO_MASTER_REASON: lines not
-    listed because they have no master line}).
+    Returns (list, counts): counts["matching"] lines that match; counts
+    ["no_line"] {NO_MASTER_REASON: lines without a master line}; counts
+    ["unpaired"] {level 3 CATEGORY: older-revision lines not paired with the
+    current revision} and counts["unpaired_own_diff"] how many of those differ
+    from their own revision; counts["matches_current_only"] older-revision
+    lines that differ from their own revision but match the current one.
     """
     flags = {f: f"D_{s}" for f, (_, s) in FIELDS.items()}
-    rows, matching, no_line_lines = [], 0, {}
+    rows = []
+    counts = {"matching": 0, "no_line": {}, "unpaired": {}, "unpaired_own_diff": 0, "matches_current_only": 0}
     for idx, r in zip(d.index, d.itertuples(index=False)):
         if r.NO_MASTER_LINE == 1:
             reason = r.NO_MASTER_REASON or "UNKNOWN"
-            no_line_lines[reason] = no_line_lines.get(reason, 0) + 1
+            counts["no_line"][reason] = counts["no_line"].get(reason, 0) + 1
             continue
-        compared = idx in l3.index and pd.notna(l3.at[idx, "CUR_SEQUENCE_NO"])
         own = [f for f in FIELDS if getattr(r, flags[f]) == 1]
-        today = [f for f, (_, s) in FIELDS.items() if compared and l3.at[idx, f"D3_{s}"] == 1]
-        if own and compared and not today:
-            key, pairs = "info", {f: (shown(getattr(r, f"WO_{f}")), shown(getattr(r, f"M_{f}"))) for f in own}
-        elif own:
-            key = "check" if "RESOURCE_ID" in own else "update"
-            pairs = {f: (shown(getattr(r, f"WO_{f}")), shown(getattr(r, f"M_{f}"))) for f in own}
-        elif today:
-            key = "today"
-            pairs = {f: (shown(getattr(r, f"WO_{f}")), shown(l3.at[idx, f"CUR_{f}"])) for f in today}
-        else:
-            matching += 1
-            continue
-        # current master: the line itself for an order on (or moved onto) the
-        # current routing, the level 3 pairing for an older revision
         on_current = r.ON_CURRENT_ROUTING == 1
+        compared = not on_current and pd.notna(l3.at[idx, "CUR_SEQUENCE_NO"])
+        if on_current:
+            tag, diff = "M", own
+            pairs = {f: (shown(getattr(r, f"WO_{f}")), shown(getattr(r, f"M_{f}"))) for f in own}
+        elif compared:
+            # older revision: the current revision is the reference (PM and SC)
+            tag = "C"
+            diff = [f for f, (_, s) in FIELDS.items() if l3.at[idx, f"D3_{s}"] == 1]
+            pairs = {f: (shown(getattr(r, f"WO_{f}")), shown(l3.at[idx, f"CUR_{f}"])) for f in diff}
+            if own and not diff:
+                counts["matches_current_only"] += 1
+        else:
+            cat = l3.at[idx, "CATEGORY"]
+            counts["unpaired"][cat] = counts["unpaired"].get(cat, 0) + 1
+            counts["unpaired_own_diff"] += bool(own)
+            continue
+        if not diff:
+            counts["matching"] += 1
+            continue
+        if "RESOURCE_ID" in diff:
+            key = "check"
+        else:
+            key = "update" if on_current else "update_cur"
         rec = {
-            "_S": list(SCENARIOS).index(key), "_DIFF": list(pairs),
+            "_S": list(SCENARIOS).index(key), "_DIFF": diff, "_T": tag,
             "WO_OPS_ROWID": r.WORKORDER_OPS_ROWID,
             "M_OPS_ROWID": r.MASTER_OPS_ROWID,
             "C_MASTER_OPS_ROWID": r.MASTER_OPS_ROWID if on_current else
@@ -548,7 +595,7 @@ def build_list(d, l3):
             "M_STEP": int(r.M_SEQUENCE_NO) if pd.notna(r.M_SEQUENCE_NO) else pd.NA,
             "WO_REV": r.WO_REV, "M_REV": r.CURRENT_REV if r.USER_8_STALE == 1 else r.WO_REV,
             "C_REV": r.CURRENT_REV,
-            "DIFF_KEY": make_diff_key(pairs, "C" if key == "today" else "M"),
+            "DIFF_KEY": make_diff_key(pairs, tag),
             "SCENARIO": SCENARIOS[key], "SQL_UPDATE": "",
         }
         for f, s in SHORT.items():
@@ -557,12 +604,13 @@ def build_list(d, l3):
             rec[f"C_{s}"] = (rec[f"M_{s}"] if on_current else
                              l3.at[idx, f"CUR_{f}"] if compared else pd.NA)
         rows.append(rec)
-    x = pd.DataFrame(rows, columns=["_S", "_DIFF"] + LIST_COLUMNS)
-    return x.sort_values(["_S", "OPERATION", "WO", "STEP"]).reset_index(drop=True), matching, no_line_lines
+    x = pd.DataFrame(rows, columns=["_S", "_DIFF", "_T"] + LIST_COLUMNS)
+    return x.sort_values(["_S", "OPERATION", "WO", "STEP"]).reset_index(drop=True), counts
 
 
 def add_sql_update(lst):
-    """SQL_UPDATE on every 'Work order to update' line, as a live spreadsheet formula.
+    """SQL_UPDATE on every line of both 'Work order to update' scenarios, as a
+    live spreadsheet formula reading the value compared with (M_ or C_).
 
     Uses the row's position in the written sheet (header = row 1), so lst
     must be in its final order and column order. See THE SQL UPDATER above.
@@ -570,22 +618,26 @@ def add_sql_update(lst):
     """
     from openpyxl.utils import get_column_letter
     col = {c: get_column_letter(i + 1) for i, c in enumerate(LIST_COLUMNS)}
+    updates = {SCENARIOS[k] for k in UPDATE_SCENARIOS}
     written = blank = 0
     for n, (i, r) in enumerate(lst.iterrows(), start=2):
-        if r.SCENARIO != SCENARIOS["update"]:
+        if r.SCENARIO not in updates:
             continue
         fields = [f for f in r._DIFF if f != "RESOURCE_ID"]
+        src = {f: f"{r._T}_{SHORT[f]}" for f in fields}
         if (pd.isna(r.WO_OPS_ROWID) or not fields
-                or any(pd.isna(r[f"M_{SHORT[f]}"]) or code(r[f"M_{SHORT[f]}"]) is None for f in fields)):
+                or any(pd.isna(r[src[f]]) or code(r[src[f]]) is None for f in fields)):
             blank += 1
             continue
-        sets = ", ".join(f"{f} = '\"&{col['M_' + SHORT[f]]}{n}&\"'" for f in fields)
+        sets = ", ".join(f"{f} = '\"&{col[src[f]]}{n}&\"'" for f in fields)
         lst.at[i, "SQL_UPDATE"] = f'="UPDATE OPERATION SET {sets} WHERE ROWID = "&{col["WO_OPS_ROWID"]}{n}&";"'
         written += 1
     return written, blank
 
 
-FILL_WO, FILL_TARGET, FILL_UPDATE = "FCE4D6", "E2EFDA", "EDEDED"   # light orange, light green, light grey
+# orange, green (Excel's "Good" fill), grey - stronger than the first pastel
+# tones (FCE4D6 / E2EFDA / EDEDED), which some screens showed as white (2026-10-21)
+FILL_WO, FILL_TARGET, FILL_UPDATE = "F8CBAD", "C6EFCE", "D9D9D9"
 
 
 def colour_differences(ws, lst):
@@ -594,12 +646,13 @@ def colour_differences(ws, lst):
     fills = {p: PatternFill("solid", start_color=c, end_color=c)
              for p, c in (("WO", FILL_WO), ("T", FILL_TARGET), ("U", FILL_UPDATE))}
     pos = {c: i + 1 for i, c in enumerate(LIST_COLUMNS)}
+    updates = {SCENARIOS[k] for k in UPDATE_SCENARIOS}
     coloured = 0
     for n, (_, r) in enumerate(lst.iterrows(), start=2):
-        if r.SCENARIO == SCENARIOS["update"]:   # whole row grey first, the differences on top
+        if r.SCENARIO in updates:   # whole row grey first, the differences on top
             for i in range(1, len(LIST_COLUMNS) + 1):
                 ws.cell(n, i).fill = fills["U"]
-        target = "C" if r.SCENARIO == SCENARIOS["today"] else "M"
+        target = r._T   # M_ or C_: the value compared with
         for f in r._DIFF:
             ws.cell(n, pos[f"WO_{SHORT[f]}"]).fill = fills["WO"]
             ws.cell(n, pos[f"{target}_{SHORT[f]}"]).fill = fills["T"]
@@ -696,8 +749,13 @@ def fates_since_last(prev, d, lst, stale_wos):
       fixed - order updated          the order now carries the old master value
       fixed - master updated         the master now carries the order's old value
       fixed - both changed           order and master agree on a third value
-      fixed - now matches            no longer differs (a line without master line
-                                     or compared with the current master before)
+      fixed - now matches            no longer differs (compared with the current
+                                     revision before, or the order is on an older
+                                     revision and now matches the current one)
+    Lines tagged (C) in DIFF_KEY were compared with the current revision; "order
+    updated" then means the order now carries that value. Lines of the scenarios
+    no longer listed - "No master line", "Work order matches current master" -
+    are not followed up.
     """
     cols = ["FATE", "WO", "STEP", "OPERATION", "SCENARIO_BEFORE", "DIFF_KEY_BEFORE", "DIFF_KEY_NOW"]
     if prev is None or prev.empty:
@@ -713,11 +771,14 @@ def fates_since_last(prev, d, lst, stale_wos):
     stale = {code(w) for w in stale_wos}
     rows = []
     for (w, s, op, dk), scen in zip(line_key(prev, "SEQ"), prev.SCENARIO):
-        # lines without a master line are no longer listed (2026-10-21): what
-        # became of them in an older list is not followed up
-        if (w, s, op, dk) in current or str(scen) == OLD_NOMASTER:
+        # scenarios no longer listed (2026-10-21) - lines without a master
+        # line, orders already matching the current revision - are not followed up
+        if (w, s, op, dk) in current or str(scen) == OLD_NOMASTER or str(scen) == OLD_CUR_SCENARIOS[-1]:
             continue
         before = parse_diff_key(dk)
+        # compared with the current revision before: tagged (C), or the old
+        # "Differs from ..." scenario (whose earliest lists had no tags)
+        tag = "C" if "(C)" in str(dk) or str(scen).startswith("Differs from") else "M"
         now = ""
         if w in stale:
             fate = "moved by USER_8 rule"
@@ -727,9 +788,14 @@ def fates_since_last(prev, d, lst, stale_wos):
             fate = "still listed, changed"
         else:
             r = d.loc[by_line[(w, s, op)]]
-            now = make_diff_key({f: (shown(r[f"WO_{f}"]), shown(r[f"M_{f}"])) for f in before})
-            own_compare = before and not str(scen).startswith("Differs from")
-            if not own_compare:
+            if tag == "C" or r.ON_CURRENT_ROUTING == 0:
+                # the reference is the current revision: the order fixed means
+                # it now carries the value the list proposed (tag C), else the
+                # line simply matches the current revision now
+                updated = tag == "C" and before and all(same_value(r[f"WO_{f}"], cv, f)
+                                                        for f, (_, cv) in before.items())
+                fate = "fixed - order updated" if updated else "fixed - now matches"
+            elif not before:
                 fate = "fixed - now matches"
             elif all(same_value(r[f"WO_{f}"], om, f) for f, (_, om) in before.items()):
                 fate = "fixed - order updated"
@@ -737,8 +803,10 @@ def fates_since_last(prev, d, lst, stale_wos):
                 fate = "fixed - master updated"
             else:
                 fate = "fixed - both changed"
+            if tag == "M" and r.ON_CURRENT_ROUTING == 1:
+                now = make_diff_key({f: (shown(r[f"WO_{f}"]), shown(r[f"M_{f}"])) for f in before})
         rows.append({"FATE": fate, "WO": w, "STEP": s, "OPERATION": op, "SCENARIO_BEFORE": scen,
-                     "DIFF_KEY_BEFORE": make_diff_key(before, "C" if str(scen).startswith("Differs from") else "M"),
+                     "DIFF_KEY_BEFORE": make_diff_key(before, tag),
                      "DIFF_KEY_NOW": now})
     return pd.DataFrame(rows, columns=cols).sort_values(["FATE", "WO", "STEP"]).reset_index(drop=True)
 
@@ -808,11 +876,13 @@ def main():
 
     l3 = level3(d, m)
     l2 = level2(d, l3)
-    lst, matching, no_line_lines = build_list(d, l3)
-    no_line = sum(no_line_lines.values())
-    if len(lst) + matching + no_line != len(d) or lst.duplicated(["WO", "STEP"]).any():
+    lst, counts = build_list(d, l3)
+    matching, no_line_lines, unpaired = counts["matching"], counts["no_line"], counts["unpaired"]
+    no_line, n_unpaired = sum(no_line_lines.values()), sum(unpaired.values())
+    if len(lst) + matching + no_line + n_unpaired != len(d) or lst.duplicated(["WO", "STEP"]).any():
         sys.exit(f"the list does not account for every line once: {len(lst)} listed + {matching} matching "
-                 f"+ {no_line} without master line vs {len(d)} lines")
+                 f"+ {no_line} without master line + {n_unpaired} not paired with the current revision "
+                 f"vs {len(d)} lines")
     by_name = d[(d.MATCHED_BY == "UNIQUE_NAME") & (d.NO_MASTER_LINE == 0)]
     by_name_listed = int(lst.STEP.map(seq_key).ne(lst.M_STEP.map(seq_key)).sum())
     prev = read_previous(prev_path) if prev_path else None
@@ -834,11 +904,17 @@ def main():
         ("", ""),
         ("Open, not-started WO operations", len(d)),
         ("Work orders", d[WO_KEY].drop_duplicates().shape[0]),
-        ("Lines matching their master (not listed)", matching),
+        ("Lines matching the master they follow (not listed)", matching),
+        ("   of which older-revision lines matching the current revision but not their own",
+         counts["matches_current_only"]),
         ("Lines without a master line (not listed)", no_line),
     ]
     summary += [(f"   without master line - {NO_MASTER_REASONS.get(k, k)}", n)
                 for k, n in sorted(no_line_lines.items(), key=lambda kv: -kv[1])]
+    summary += [("Older-revision lines not paired with the current revision (not listed)", n_unpaired)]
+    summary += [(f"   not paired - {UNPAIRED.get(k, k)}", n)
+                for k, n in sorted(unpaired.items(), key=lambda kv: -kv[1])]
+    summary += [("   of which differ from their own revision", counts["unpaired_own_diff"])]
     summary += [
         ("Lines paired by unique name (step renumbered in the master)",
          f"{len(by_name)} - of which listed with a difference: {by_name_listed}"),
@@ -848,8 +924,8 @@ def main():
         part = lst[lst.SCENARIO == name]
         summary.append((f"Scenario - {name}", f"{len(part)} lines, {part.WO.nunique()} work orders"))
     summary += [
-        ("SQL_UPDATE - statements written (Work order to update)", sql_written),
-        ("SQL_UPDATE - Work order to update lines left empty (master value or WO_OPS_ROWID blank)", sql_blank),
+        ("SQL_UPDATE - statements written (both Work order to update scenarios)", sql_written),
+        ("SQL_UPDATE - update lines left empty (value or WO_OPS_ROWID blank)", sql_blank),
     ]
     summary.append(("", ""))
     summary.append(("Since the previous list (02_SinceLastList) - lines not listed again unchanged", len(fates)))
@@ -864,7 +940,8 @@ def main():
     summary += [
         ("Check: level 3 parts missing from masters export", not_extracted),
         ("Check: matched own lines missing from masters export", not_in_export),
-        ("LEVEL 3 NOTE", "INDICATIVE. Pairing assumes same name = same step. "
+        ("LEVEL 3 NOTE", "Drives the list for older-revision orders since 2026-10-21 (current revision = "
+                         "reference). Pairs only unambiguous names; NOT_COMPARED lines stay unpaired. "
                          "To be reviewed again (agreed 2026-09-28)."),
     ]
 

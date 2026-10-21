@@ -43,7 +43,7 @@ Compared fields: planned resource, `RUN_TYPE`, `RUN`, `LOAD_SIZE_QTY`,
 |---|---|---|---|
 | **1** | each WO operation with the master of **its own revision**, as that master is today | same sequence and same operation name - exact, since the WO copied that revision line by line; failing that, the same name when it is unique in the master and in the order (master renumbered) | firm |
 | **2** | - | one row per WO built on an **older** revision than the current one: the routing itself changed, a planner reviews the whole order | firm |
-| **3** | older-revision WO operations with the **current** revision's master | a new revision usually inserts a step and shifts later ones, so sequence numbers do not match. Lines are paired only when the name is unique in both revisions, when all its occurrences carry the same values, or when each occurrence has its own resource. Everything else is reported as not compared | **indicative** - assumes the same name is the same step; to be reviewed |
+| **3** | older-revision WO operations with the **current** revision's master | a new revision usually inserts a step and shifts later ones, so sequence numbers do not match. Lines are paired only when the name is unique in both revisions, when all its occurrences carry the same values, or when each occurrence has its own resource. Everything else is reported as not compared | **firm where paired** (since 2026-10-21 the current revision is the reference, so these pairings drive the list): the order's line is matched exactly to its own revision, and the name is unambiguous in both revisions. The 'name repeats with different values' lines stay unpaired - to be reviewed |
 
 ### When `USER_8` is out of date
 
@@ -120,55 +120,74 @@ the order's operations, the query pairs the two lines by name
 the order's `STEP`. Before, such lines showed as "no master line" and hid
 real differences.
 
-Each listed row has exactly one `SCENARIO`, decided in this order:
+**The reference is the current revision** (PM and SC, 2026-10-21). An order
+created on an older revision follows the **current** revision of the master -
+the one `PART_SITE.ENGINEERING_MSTR` names - not the one it was created from:
+an order still carrying its old revision's rate is brought to the current
+one, and an order that already carries the current rate is left alone. So:
+
+- an order on the current revision is compared with its master line (`M_`),
+  paired exactly;
+- an order on an older revision is compared with the current revision (`C_`),
+  through the level 3 pairing of its exact own-revision line: unique name,
+  identical occurrences, or each occurrence on its own resource. Lines level 3
+  cannot pair - the name repeats with different values, the step no longer
+  exists in the current revision - are counted by reason in `00_Summary`, not
+  listed: their current value is unknown.
+
+Each listed row has exactly one `SCENARIO`:
 
 | `SCENARIO` | Meaning | Basis |
 |---|---|---|
-| `Work order matches current master` | an older-revision line that differs from its own old revision, while every value equals the current master | nothing to change on the order |
-| `Resource changed` | the resource differs from the master | 28 Sep review: 9 of 13 intentional, 4 not - always looked at |
-| `Work order to update` | same resource, another value differs | 28 Sep review: 51 of 51 - the order follows the master |
-| `Differs from current master (WO on older revision)` | matches its own old revision, but the current master has a different value | level 3 pairing - indicative |
+| `Work order to update` | order on the current revision; same resource, another value differs from its master | 28 Sep review: 51 of 51 - the order follows the master |
+| `Work order to update (current revision)` | order on an older revision; same resource, another value differs from the current revision | PM and SC, 2026-10-21 |
+| `Resource changed` | the resource differs from the master the line follows | 28 Sep review: 9 of 13 intentional; SC: "should be" intentional - kept listed |
+
+Until 2026-10-21 there were also `Differs from current master (WO on older
+revision)` - now `Work order to update (current revision)` - and `Work order
+matches current master`, now not listed: such an order is correct as it is.
 
 Columns, in order:
 
 | Columns | Content |
 |---|---|
-| `WO_OPS_ROWID`, `M_OPS_ROWID`, `C_MASTER_OPS_ROWID` | the order's operation line, the master line it is compared with, the current master line |
+| `WO_OPS_ROWID`, `M_OPS_ROWID`, `C_MASTER_OPS_ROWID` | the order's operation line, its own master line, the current revision's line |
 | `FAMILY`, `PART_ID`, `PART_DESCRIPTION` | which part |
 | `WO`, `WO_STATUS`, `WO_CREATE_DATE`, `WO_DESIRED_RLS_DATE` | which order |
 | `OPERATION`, `STEP`, `M_STEP` | which step: `STEP` = the order's sequence number, `M_STEP` = the master line's (different only when paired by name) |
-| `WO_REV`, `M_REV`, `C_REV` | the order's revision (`USER_8`), the one it is compared with, today's |
-| `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its master's and the current master's values side by side |
-| `DIFF_KEY` | what differs, each value tagged with its source, e.g. `RUN: 60 (WO) \| 70 (M); SETUP_HRS: 0 (WO) \| 1 (M)` - `(C)` for the current master on the "differs from current master" scenario. Also what recognises the line next time (the plain form of lists before 12 Oct 2026, `RUN=60\|70`, is still read) |
+| `WO_REV`, `M_REV`, `C_REV` | the order's revision (`USER_8`), its master's, the current one - `WO_REV` ≠ `C_REV` marks an order on an older revision |
+| `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its own master's and the current revision's values side by side |
+| `DIFF_KEY` | what differs, each value tagged with its source, e.g. `RUN: 60 (WO) \| 70 (M); SETUP_HRS: 0 (WO) \| 1 (M)` - `(C)` when compared with the current revision (an order on an older revision). Also what recognises the line next time (the plain form of lists before 12 Oct 2026, `RUN=60\|70`, is still read) |
 | `SCENARIO` | see above |
 | `SQL_UPDATE` | the statement for the order - see below |
 
 For every difference in `DIFF_KEY` the two cells involved are coloured: the
-order's value (`WO_`) light orange, the value it is compared with light green -
-`M_`, or `C_` on `Differs from current master`. `Work order to update` rows
-are light grey across the whole row, under those two colours. The colours are set when the
-list is written and do not follow later edits in the sheet.
+order's value (`WO_`) orange, the value it is compared with green -
+`M_`, or `C_` when tagged `(C)`. Both `Work order to update` scenarios are
+grey across the whole row, under those two colours. The colours are set
+when the list is written and do not follow later edits in the sheet.
 
-`M_` is the master the line was compared with: its own revision, or the current one
-for an order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an
-order on the current revision `C_` = `M_`.
+`M_` is the order's own master: its own revision, or the current one for an
+order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an order on
+the current revision `C_` = `M_`.
 
-**`SQL_UPDATE`** is written only on `Work order to update` lines:
+**`SQL_UPDATE`** is written on both `Work order to update` scenarios:
 
 ```
 UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
 ```
 
-- it sets only the fields that differ, to the `M_` value - never the resource;
-- it is a **spreadsheet formula**, not text: it reads the `M_` cells and
+- it sets only the fields that differ, to the value the line is compared
+  with - `M_` on `Work order to update`, `C_` on `Work order to update
+  (current revision)` - never the resource, never the step number;
+- it is a **spreadsheet formula**, not text: it reads those cells and
   `WO_OPS_ROWID` of its own row, so correcting a value in the sheet corrects
   the statement; the column letters are derived from the column order;
-- it is left **empty** when a master value or `WO_OPS_ROWID` is blank, so
-  nothing can blank a field by accident;
-- the other scenarios get no statement: a resource change needs a person,
-  the current master is only paired indicatively, and the rest has nothing to
-  copy. Nothing here runs anything - it produces the SQL and leaves running
-  it to a person who has read it.
+- it is left **empty** when a value or `WO_OPS_ROWID` is blank, so nothing
+  can blank a field by accident;
+- `Resource changed` gets no statement: a resource change needs a person.
+  Nothing here runs anything - it produces the SQL and leaves running it to
+  a person who has read it.
 
 Leave the list where it is: the next run reads the most recently saved list
 in the `outputs` folder, other than the one it is about to overwrite (or
