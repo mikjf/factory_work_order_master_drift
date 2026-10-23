@@ -16,13 +16,15 @@ were saved on different days, or if their resource IDs lost leading zeros.
 
 Output: <repo>_private\\outputs\\master_drift_list_<date>.xlsx by default,
 never inside this repo - it names real parts and orders:
+  00_Legend           how to read the list: scenarios, colours, columns
+                      (user, 2026-10-23); the workbook opens on 01_SqlUpdater
   00_Summary          counts per scenario, checks, since last list
   01_SqlUpdater       THE list: one row per line that does not match the
                       master it follows (its own; the current revision for an
                       order on an older one) - the ROWIDs, part, order, step,
                       revisions, the order's (WO_) / master's (M_) / current
                       revision's (C_) values, SCENARIO, SQL_UPDATE (an UPDATE
-                      on the order's operation, both "Work order to update"
+                      on the order's operation, both "Update - ..."
                       scenarios) - see THE DRIFT LIST and THE SQL UPDATER below
   02_SinceLastList    what happened to each line of the previous list that is
                       not listed again unchanged: fixed (order / master
@@ -402,38 +404,44 @@ def level2(d, l3):
 #     own resource - each a pairing of the order's EXACT own-revision line
 #     with one current line. Lines level 3 cannot pair are counted by
 #     category, not listed: their current value is unknown.
-# Each row has exactly one SCENARIO:
-#   Work order to update      order on the current revision; same resource,
-#                             another value differs (28 Sep review: 51 of 51 -
-#                             the order follows the master)
-#   Work order to update (current revision)
-#                             order on an older revision; same resource,
+# Each row has exactly one SCENARIO (names chosen by the user, 2026-10-23:
+# factual - which master the order differs from, not why; the cause may be a
+# master corrected later, a master wrong at creation or an order edited):
+#   Update - WO differs from master (WO rev)
+#                             order on its master's revision (the current
+#                             one): same resource, another value differs from
+#                             that master (28 Sep review: 51 of 51 - the order
+#                             follows the master)
+#   Update - WO differs from master (current rev)
+#                             order on an older revision: same resource,
 #                             another value differs from the current revision
 #   Resource changed          the resource differs from the master compared
 #                             with (28 Sep review: 9 of 13 intentional; SC,
 #                             2026-10-21: "should be" intentional - kept)
 # Lines that match are counted, not listed. DIFF_KEY names exactly what
 # differs, each value tagged (WO) / (M) / (C) - (C) for an older-revision
-# order. Until 2026-10-21 there were also "Differs from current master (WO on
-# older revision)" - now "Work order to update (current revision)" - and
-# "Work order matches current master" - now not listed: correct as it is.
+# order. Earlier names: "Work order to update" and "Work order to update
+# (current revision)" (12-23 Oct); before 21 Oct also "Differs from current
+# master (WO on older revision)" - the new-revision case - and "Work order
+# matches current master", now not listed: correct as it is. The 00_Legend
+# sheet explains scenarios and colours to the reader.
 #
 # THE SQL UPDATER (user, 2026-10-12). The list is laid out as the user asked,
 # FTS-updater style: per line the order's (WO_), its master's (M_) and the
 # current revision's (C_) values side by side, and SQL_UPDATE - a spreadsheet
 # FORMULA that builds an UPDATE on the work-order operation (WO_OPS_ROWID)
 # from the cells of its own row, so correcting a value corrects the statement.
-#   - on both "Work order to update" scenarios; "Resource changed" needs a
+#   - on both "Update - ..." scenarios; "Resource changed" needs a
 #     person;
-#   - the value is the one compared with: M_ on "Work order to update", C_
-#     on "Work order to update (current revision)";
+#   - the value is the one compared with: M_ on "(WO rev)", C_ on
+#     "(current rev)";
 #   - it sets only the fields that differ; never RESOURCE_ID (an update line
 #     has the same resource by definition), never the step number;
 #   - empty when a master value or the ROWID is blank, so nothing can blank a
 #     field by accident. Nothing here runs anything.
 # The cells of each difference in DIFF_KEY are coloured (user, 2026-10-13):
 # the order's value (WO_) orange, the value it is compared with green (M_ or
-# C_, as tagged). Both "Work order to update" scenarios are grey across
+# C_, as tagged). Both "Update - ..." scenarios are grey across
 # the row underneath. Fills are fixed at writing time; they do not follow
 # edits made in the sheet.
 # M_ / M_REV: the order's own revision (= C_REV for an order moved by the
@@ -441,8 +449,8 @@ def level2(d, l3):
 # ---------------------------------------------------------------------------
 
 SCENARIOS = {  # key -> shown name; dict order = sort order of the list
-    "update": "Work order to update",
-    "update_cur": "Work order to update (current revision)",
+    "update": "Update - WO differs from master (WO rev)",
+    "update_cur": "Update - WO differs from master (current rev)",
     "check": "Resource changed",
 }
 UPDATE_SCENARIOS = ("update", "update_cur")   # get SQL_UPDATE and the grey row
@@ -609,7 +617,7 @@ def build_list(d, l3):
 
 
 def add_sql_update(lst):
-    """SQL_UPDATE on every line of both 'Work order to update' scenarios, as a
+    """SQL_UPDATE on every line of both 'Update - ...' scenarios, as a
     live spreadsheet formula reading the value compared with (M_ or C_).
 
     Uses the row's position in the written sheet (header = row 1), so lst
@@ -658,6 +666,70 @@ def colour_differences(ws, lst):
             ws.cell(n, pos[f"{target}_{SHORT[f]}"]).fill = fills["T"]
             coloured += 1
     return coloured
+
+
+def write_legend(book):
+    """00_Legend: how to read the list, for someone who did not build it (user,
+    2026-10-23). First sheet; the workbook still opens on the list itself."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    fill = {k: PatternFill("solid", start_color=c, end_color=c)
+            for k, c in (("WO", FILL_WO), ("T", FILL_TARGET), ("U", FILL_UPDATE))}
+    S = SCENARIOS
+    rows = [
+        ("title", "How to read 01_SqlUpdater", "", ""),
+        ("", "One row per open, not-started operation whose values differ from the master it follows. "
+             "Read-only: nothing is written to VISUAL.", "", ""),
+        ("head", "SCENARIO", "What it means", "What to do"),
+        ("U", S["update"],
+         "The order is on its master's revision. Some values differ from that master - the master "
+         "corrected later, the master wrong when the order was created, or the order edited. "
+         "Green = the master's value (M_).",
+         "Update the order to the green value (SQL_UPDATE)."),
+        ("U", S["update_cur"],
+         "The order was created on a revision that is no longer the current one (WO_REV differs from "
+         "C_REV). The current revision is the reference (PM and SC). Some values differ from it. "
+         "Green = the current revision's value (C_).",
+         "Update the order to the green value (SQL_UPDATE)."),
+        ("", S["check"],
+         "The planned resource differs from the master the line follows. Often intentional "
+         "(supply, PM).",
+         "Check; correct by hand if needed. No SQL_UPDATE."),
+        ("", "", "", ""),
+        ("head", "COLOUR", "Meaning", ""),
+        ("WO", "orange", "the order's value today (WO_ column)", ""),
+        ("T", "green", "the value it should have - the one SQL_UPDATE writes (M_ or C_ column)", ""),
+        ("U", "grey row", "an update line: it has an SQL_UPDATE", ""),
+        ("", "", "", ""),
+        ("head", "COLUMNS", "Meaning", ""),
+        ("", "WO_ / M_ / C_", "the order's value / its own master's / the current revision's", ""),
+        ("", "WO_REV / M_REV / C_REV", "the order's revision / its master's / the current one", ""),
+        ("", "STEP / M_STEP", "the order's step / the master's (different only when the master was renumbered)", ""),
+        ("", "DIFF_KEY", "what differs, e.g. RUN: 60 (WO) | 70 (M) - (C) = compared with the current revision", ""),
+        ("", "SQL_UPDATE", "the statement for the order, built from the green cells of its row: only the values "
+                           "that differ, never the resource or the step. Nothing runs it automatically.", ""),
+        ("", "", "", ""),
+        ("head", "NOT LISTED", "Counted in 00_Summary", ""),
+        ("", "matching lines", "the order already has the values of the master it follows", ""),
+        ("", "no master line", "steps added to the order on the go (rework, samples): nothing to compare", ""),
+        ("", "not paired", "older-revision lines that cannot be paired with the current revision without guessing", ""),
+        ("", "", "", ""),
+        ("", "02_SinceLastList", "what happened to the lines of the previous list: fixed, started, replaced ...", ""),
+    ]
+    ws = book.create_sheet("00_Legend", 0)
+    wrap = Alignment(wrap_text=True, vertical="top")
+    for n, (kind, a, b, c) in enumerate(rows, start=1):
+        for col, v in enumerate((a, b, c), start=1):
+            cell = ws.cell(n, col, v)
+            cell.alignment = wrap
+            if kind in ("head", "title"):
+                cell.font = Font(bold=True, size=13 if kind == "title" else 11)
+        if kind in fill:
+            ws.cell(n, 1).fill = fill[kind]
+    for col, w in (("A", 46), ("B", 90), ("C", 42)):
+        ws.column_dimensions[col].width = w
+    book.active = book.sheetnames.index(LIST_SHEET)
+    for sheet in book.worksheets:   # only the list shows as selected
+        sheet.sheet_view.tabSelected = sheet.title == LIST_SHEET
 
 
 def line_key(df, seq_col, wo_col="WORK_ORDER"):
@@ -933,7 +1005,7 @@ def main():
         part = lst[lst.SCENARIO == name]
         summary.append((f"Scenario - {name}", f"{len(part)} lines, {part.WO.nunique()} work orders"))
     summary += [
-        ("SQL_UPDATE - statements written (both Work order to update scenarios)", sql_written),
+        ("SQL_UPDATE - statements written (both Update scenarios)", sql_written),
         ("SQL_UPDATE - update lines left empty (value or WO_OPS_ROWID blank)", sql_blank),
     ]
     summary.append(("", ""))
@@ -975,6 +1047,7 @@ def main():
         fs = xw.sheets["02_SinceLastList"]
         for col, w in {"A": 34, "B": 14, "C": 7, "D": 24, "E": 34, "F": 50, "G": 50, "H": 40}.items():
             fs.column_dimensions[col].width = w
+        write_legend(xw.book)   # after the loop above: no filter or frozen header there
 
     for k, v in summary:
         print(f"{k:<80} {v}")

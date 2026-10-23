@@ -140,13 +140,18 @@ Each listed row has exactly one `SCENARIO`:
 
 | `SCENARIO` | Meaning | Basis |
 |---|---|---|
-| `Work order to update` | order on the current revision; same resource, another value differs from its master | 28 Sep review: 51 of 51 - the order follows the master |
-| `Work order to update (current revision)` | order on an older revision; same resource, another value differs from the current revision | PM and SC, 2026-10-21 |
+| `Update - WO differs from master (WO rev)` | order on its master's revision (the current one); same resource, another value differs from that master | 28 Sep review: 51 of 51 - the order follows the master |
+| `Update - WO differs from master (current rev)` | order on an older revision; same resource, another value differs from the current revision | PM and SC, 2026-10-21 |
 | `Resource changed` | the resource differs from the master the line follows | 28 Sep review: 9 of 13 intentional; SC: "should be" intentional - kept listed |
 
-Until 2026-10-21 there were also `Differs from current master (WO on older
-revision)` - now `Work order to update (current revision)` - and `Work order
-matches current master`, now not listed: such an order is correct as it is.
+The names say which master the order differs from, not why: the cause may be
+a master corrected later, a master wrong when the order was created, or an
+order edited (user, 2026-10-23). Earlier names: `Work order to update` and
+`Work order to update (current revision)`; before 2026-10-21 also `Differs
+from current master (WO on older revision)` (the current-rev case) and `Work
+order matches current master`, now not listed: such an order is correct as
+it is. The `00_Legend` sheet explains scenarios, colours and columns to the
+reader.
 
 Columns, in order:
 
@@ -164,7 +169,7 @@ Columns, in order:
 
 For every difference in `DIFF_KEY` the two cells involved are coloured: the
 order's value (`WO_`) orange, the value it is compared with green -
-`M_`, or `C_` when tagged `(C)`. Both `Work order to update` scenarios are
+`M_`, or `C_` when tagged `(C)`. Both `Update - ...` scenarios are
 grey across the whole row, under those two colours. The colours are set
 when the list is written and do not follow later edits in the sheet.
 
@@ -172,15 +177,15 @@ when the list is written and do not follow later edits in the sheet.
 order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an order on
 the current revision `C_` = `M_`.
 
-**`SQL_UPDATE`** is written on both `Work order to update` scenarios:
+**`SQL_UPDATE`** is written on both `Update - ...` scenarios:
 
 ```
 UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
 ```
 
 - it sets only the fields that differ, to the value the line is compared
-  with - `M_` on `Work order to update`, `C_` on `Work order to update
-  (current revision)` - never the resource, never the step number;
+  with - `M_` on `(WO rev)`, `C_` on `(current rev)` - never the resource,
+  never the step number;
 - it is a **spreadsheet formula**, not text: it reads those cells and
   `WO_OPS_ROWID` of its own row, so correcting a value in the sheet corrects
   the statement; the column letters are derived from the column order;
@@ -200,11 +205,12 @@ every earlier layout are still read.
 
 | Sheet | Content |
 |---|---|
+| `00_Legend` | how to read the list - scenarios, colours, columns - for someone who did not build it. The workbook opens on `01_SqlUpdater` |
 | `00_Summary` | counts per scenario, the lines not listed by reason (no master line; older revision not paired with the current one), lines paired by name, checks, input files, what happened since the previous list |
 | `01_SqlUpdater` | **the list**, with the update statements - see above |
 | `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed - order updated** (the order now carries the value the list proposed), fixed - master updated / both changed / now matches, **started, closed or removed** (mostly produced on the values it had - the export cannot tell a started step from a deleted one), **step replaced by another operation** (same step number, another operation name: removed or renamed, not fixed), **not compared - current revision not paired** (an older-revision order level 3 cannot pair: not listed, but not known to match), still listed but changed, or moved by the `USER_8` rule. Lines of scenarios no longer listed are not followed up. Shows whether the list is acted on |
 | `03_OldRevisionWOs` | level 2, one row per work order on an older revision, with its level 1 and level 3 counts |
-| `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current revision's values (`CUR_*`, `D3_*`) - the basis of `Work order to update (current revision)` |
+| `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current revision's values (`CUR_*`, `D3_*`) - the basis of `Update - WO differs from master (current rev)` |
 | `05_StaleUser8` | orders moved onto the current routing because `USER_8` is out of date, with what they showed before |
 
 ### Exit codes and checks
