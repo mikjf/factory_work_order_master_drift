@@ -817,6 +817,8 @@ def fates_since_last(prev, d, lst, stale_wos, l3):
                                      operation - mostly produced (or closing) on
                                      the values it had; this export cannot tell a
                                      started step from a deleted one
+      partly fixed - still listed    listed again with fewer differences, the rest
+                                     unchanged - some values corrected (2026-10-23)
       still listed, changed          listed again, with other differences
       fixed - order updated          the order now carries the value the list
                                      proposed (M or C)
@@ -839,29 +841,35 @@ def fates_since_last(prev, d, lst, stale_wos, l3):
     current = set(line_key(lst, "STEP", "WO"))
     # lines are matched on order, step AND operation name: a step can be
     # replaced by another operation under the same number
-    listed_now = {(code(w), seq_key(s), code(o)) for w, s, o in zip(lst.WO, lst.STEP, lst.OPERATION)}
+    listed_now = {(code(w), seq_key(s), code(o)): dk for w, s, o, dk in zip(lst.WO, lst.STEP, lst.OPERATION, lst.DIFF_KEY)}
     by_line, steps = {}, set()
     for i, w, s, o in zip(d.index, d.WORK_ORDER.map(code), d.OPERATION_SEQUENCE.map(seq_key), d.OPERATION.map(code)):
         by_line.setdefault((w, s, o), i)
         steps.add((w, s))
     stale = {code(w) for w in stale_wos}
     rows = []
-    for (w, s, op, dk), scen in zip(line_key(prev, "SEQ"), prev.SCENARIO):
+    for (w, s, op, dk), scen, raw_dk in zip(line_key(prev, "SEQ"), prev.SCENARIO, prev.DIFF_KEY):
         # scenarios no longer listed (2026-10-21) - lines without a master
         # line, orders already matching the current revision - are not followed up
         if (w, s, op, dk) in current or str(scen) == OLD_NOMASTER or str(scen) == OLD_CUR_SCENARIOS[-1]:
             continue
         before = parse_diff_key(dk)
-        # compared with the current revision before: tagged (C), or the old
-        # "Differs from ..." scenario (whose earliest lists had no tags)
-        tag = "C" if "(C)" in str(dk) or str(scen).startswith("Differs from") else "M"
+        # compared with the current revision before: tagged (C) in the list's
+        # own DIFF_KEY (dk above is the normalised form, without tags - reading
+        # the tag from it labelled every line (M) until 2026-10-23), or the old
+        # "Differs from ..." scenario, whose earliest lists had no tags
+        tag = "C" if "(C)" in str(raw_dk) or str(scen).startswith("Differs from") else "M"
         now = ""
         if w in stale:
             fate = "moved by USER_8 rule"
         elif (w, s, op) not in by_line:
             fate = "step replaced by another operation" if (w, s) in steps else "started, closed or removed"
         elif (w, s, op) in listed_now:
-            fate = "still listed, changed"
+            now = listed_now[(w, s, op)]
+            after = parse_diff_key(now)
+            # fewer differences, the remaining ones exactly as before
+            partly = set(after) < set(before) and all(after[f] == before[f] for f in after)
+            fate = "partly fixed - still listed" if partly else "still listed, changed"
         else:
             i = by_line[(w, s, op)]
             r = d.loc[i]
