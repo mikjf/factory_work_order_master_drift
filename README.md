@@ -24,7 +24,11 @@ old ones.
 | **Drift** | a value on the WO's operation that differs from the master it follows: its own master on the current revision, the **current** revision for an order on an older one (PM and SC, 2026-10-21) |
 
 Compared fields: planned resource, `RUN_TYPE`, `RUN`, `LOAD_SIZE_QTY`,
-`SETUP_HRS` and `USER_5` (planned crew; empty counts as 1). `RUN_HRS` and
+`SETUP_HRS` and `USER_5` (planned crew). An empty crew against a filled one
+is a difference (since 2026-10-23: the crew must be filled in correctly;
+until then empty counted as 1); empty against empty is equal. To recognise
+which routing an order carries (the `USER_8` rule below, level 3), an empty
+crew still counts as 1, so a missing crew does not hide the routing. `RUN_HRS` and
 `CALC_START_QTY` depend on the order quantity and are not compared.
 
 ## Scope

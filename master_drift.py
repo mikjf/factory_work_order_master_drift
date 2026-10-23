@@ -96,8 +96,14 @@ LINE_KEY = WO_KEY + ["OPERATION_SEQUENCE"]
 
 # compared field -> (text field?, flag suffix used by master_drift.sql)
 # NULL_AS: value an empty field counts as when compared - kept in step with
-# master_drift.sql. Empty crew = 1 (user, 2026-09-28). Output shows raw values.
-NULL_AS = {"USER_5": 1}
+# master_drift.sql. Until 2026-10-23 an empty crew counted as 1; since then it
+# is a difference (user: the crew must be filled in correctly), so nothing is
+# filled in for the comparison. Empty against empty is still equal.
+NULL_AS = {}
+# for RECOGNISING which routing an order carries (stale-USER_8 rule, level 3
+# identical occurrences) an empty crew still counts as 1: a missing crew must
+# not hide the routing - the values are then compared strictly with NULL_AS.
+RECOGNISE_NULL_AS = {"USER_5": 1}
 FIELDS = {
     "RESOURCE_ID": (True, "RESOURCE"),
     "RUN_TYPE": (True, "RUN_TYPE"),
@@ -256,7 +262,10 @@ def apply_stale_user8(d, m):
         # exact matches only: a line paired by name (renumbered master) does
         # not count as "consistent with its own revision" here - otherwise
         # pairing by name (2026-10-21) would stop recognising stale labels
-        own_all = bool(((w.MATCHED_BY == "SEQUENCE") & (w[flags].fillna(0).max(axis=1) == 0)).all())
+        own_ok = w.MATCHED_BY == "SEQUENCE"
+        for f, (text, _) in FIELDS.items():
+            own_ok &= same(w[f"WO_{f}"], w[f"M_{f}"], text, RECOGNISE_NULL_AS.get(f))
+        own_all = bool(own_ok.all())
         if own_all:
             continue    # consistent with its own revision - the label may well be right
         j = w.reset_index().merge(c.add_prefix("CUR_"), how="left",
@@ -266,7 +275,7 @@ def apply_stale_user8(d, m):
             continue
         ok = pd.Series(True, index=j.index)
         for f, (text, _) in FIELDS.items():
-            ok &= same(j[f"WO_{f}"], j[f"CUR_{f}"], text, NULL_AS.get(f))
+            ok &= same(j[f"WO_{f}"], j[f"CUR_{f}"], text, RECOGNISE_NULL_AS.get(f))
         if not ok.all():
             continue
         # pandas 3 refuses to upcast silently: numbers go in as floats (NaN for blank)
@@ -278,7 +287,10 @@ def apply_stale_user8(d, m):
         d.loc[j.index, "NO_MASTER_LINE"] = 0
         d.loc[j.index, "MATCHED_BY"] = "SEQUENCE"
         d.loc[j.index, "NO_MASTER_REASON"] = None
-        d.loc[j.index, flags] = 0
+        # values compared strictly with the current master it now follows
+        for f, (text, s) in FIELDS.items():
+            d.loc[j.index, f"D_{s}"] = (~same(d.loc[j.index, f"WO_{f}"], d.loc[j.index, f"M_{f}"],
+                                              text, NULL_AS.get(f))).astype(int)
         d.loc[j.index, ["USER_8_STALE", "ON_CURRENT_ROUTING"]] = 1
         first = w.iloc[0]
         stale.append({**{k: first[k] for k in WO_KEY}, "PART_ID": first.PART_ID,
@@ -290,7 +302,7 @@ def apply_stale_user8(d, m):
 
 
 def signature(rows):
-    rows = rows[list(FIELDS)].fillna(NULL_AS)
+    rows = rows[list(FIELDS)].fillna(RECOGNISE_NULL_AS)
     return rows.apply(lambda r: "|".join(map(str, r)), axis=1)
 
 
@@ -812,7 +824,7 @@ def find_previous(folder, out):
 
 
 def same_value(a, b, field):
-    """One value against another as the comparison does: numbers as numbers, blank crew = 1."""
+    """One value against another as the comparison does: numbers as numbers, blank = blank."""
     def norm(v):
         v = None if v is None or (not isinstance(v, str) and pd.isna(v)) else v
         v = None if v in ("(empty)", "") else v

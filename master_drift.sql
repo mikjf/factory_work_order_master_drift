@@ -128,10 +128,13 @@ SELECT
          WHEN O.LOAD_SIZE_QTY = O_M.LOAD_SIZE_QTY OR (O.LOAD_SIZE_QTY IS NULL AND O_M.LOAD_SIZE_QTY IS NULL) THEN 0 ELSE 1 END AS D_LOAD_SIZE_QTY,
     CASE WHEN O_M.ROWID IS NULL THEN NULL
          WHEN O.SETUP_HRS     = O_M.SETUP_HRS     OR (O.SETUP_HRS     IS NULL AND O_M.SETUP_HRS     IS NULL) THEN 0 ELSE 1 END AS D_SETUP_HRS,
-    -- an EMPTY crew counts as 1 (user, 2026-09-28): NULL vs 1 is not drift.
-    -- The WO_/M_USER_5 columns above still show the raw values.
+    -- crew (USER_5, a text column) compared as a number. Since 2026-10-23 an
+    -- EMPTY crew is a difference against a filled one (user: the crew must be
+    -- filled in correctly); empty against empty is equal. Until then it was
+    -- ISNULL(O.USER_5, 1) = ISNULL(O_M.USER_5, 1) - empty counted as 1.
     CASE WHEN O_M.ROWID IS NULL THEN NULL
-         WHEN ISNULL(O.USER_5, 1) = ISNULL(O_M.USER_5, 1) THEN 0 ELSE 1 END AS D_USER_5
+         WHEN TRY_CONVERT(decimal(9, 2), O.USER_5) = TRY_CONVERT(decimal(9, 2), O_M.USER_5)
+           OR (O.USER_5 IS NULL AND O_M.USER_5 IS NULL) THEN 0 ELSE 1 END AS D_USER_5
 
 FROM dbo.WORK_ORDER AS WO
 INNER JOIN dbo.PART AS P
