@@ -142,6 +142,7 @@ Each listed row has exactly one `SCENARIO`:
 |---|---|---|
 | `Update - WO differs from master (WO rev)` | order on its master's revision (the current one); same resource, another value differs from that master | 28 Sep review: 51 of 51 - the order follows the master |
 | `Update - WO differs from master (current rev)` | order on an older revision; same resource, another value differs from the current revision | PM and SC, 2026-10-21 |
+| `Review - OPP WO differs from master (WO rev)`, `Review - OPP WO differs from master (current rev)` | the same two cases on an **OPP** order (a new project) | PM and SC, 2026-10-23: OPP updates are always reviewed by a person first |
 | `Resource changed` | the resource differs from the master the line follows | 28 Sep review: 9 of 13 intentional; SC: "should be" intentional - kept listed |
 
 The names say which master the order differs from, not why: the cause may be
@@ -169,15 +170,18 @@ Columns, in order:
 
 For every difference in `DIFF_KEY` the two cells involved are coloured: the
 order's value (`WO_`) orange, the value it is compared with green -
-`M_`, or `C_` when tagged `(C)`. Both `Update - ...` scenarios are
-grey across the whole row, under those two colours. The colours are set
+`M_`, or `C_` when tagged `(C)`. `Update - ...` rows are grey across the
+whole row, `Review - ...` rows light blue, under those two colours. Only the
+grey lines are candidates for automating the update later; blue lines always
+need a person. The colours are set
 when the list is written and do not follow later edits in the sheet.
 
 `M_` is the order's own master: its own revision, or the current one for an
 order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an order on
 the current revision `C_` = `M_`.
 
-**`SQL_UPDATE`** is written on both `Update - ...` scenarios:
+**`SQL_UPDATE`** is written on the `Update - ...` and `Review - ...` scenarios
+(on a review line it is ready for after the review):
 
 ```
 UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
