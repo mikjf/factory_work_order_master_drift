@@ -1073,6 +1073,11 @@ def main():
     history = list_history(PRIVATE_DIR / "outputs", out)
     today = list_day(out)
     lst["FIRST_LISTED"] = [history.get(k, today) for k in keys]
+    # final order (user, 2026-10-28): purple, light purple, blue, light blue,
+    # yellow, light yellow - then scenario, operation, order, step as before
+    lst["_G"] = lst.SCENARIO.map(lambda s: list(ROW_FILLS).index(scenario_group(s)))
+    lst = lst.sort_values(["_G", "_NEW", "_S", "OPERATION", "WO", "STEP"],
+                          ascending=[True, False, True, True, True, True]).reset_index(drop=True)
     sql_written, sql_blank = add_sql_update(lst)   # lst is in its final order here
 
     not_extracted = int((l3.CATEGORY == "MASTERS_NOT_EXTRACTED").sum()) if not l3.empty else 0
