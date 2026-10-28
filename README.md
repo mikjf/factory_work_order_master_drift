@@ -186,6 +186,10 @@ list with the same differences (since 2026-10-28):
 | `Review - ...` | blue | light blue |
 | `Resource changed` | yellow | light yellow |
 
+The list is ordered by these colours, top to bottom as in the table (new
+before already listed in each scenario group), and inside each block by
+`FIRST_LISTED`, newest first - the longest-waiting lines at the bottom.
+
 Light means "not new", not "approved". Only the purple lines are candidates
 for automating the update later; blue lines always need a person. Until
 2026-10-28 update rows were grey and the shade did not change. The colours
