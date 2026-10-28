@@ -170,15 +170,26 @@ Columns, in order:
 | `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its own master's and the current revision's values side by side |
 | `DIFF_KEY` | what differs, each value tagged with its source, e.g. `RUN: 60 (WO) \| 70 (M); SETUP_HRS: 0 (WO) \| 1 (M)` - `(C)` when compared with the current revision (an order on an older revision). Also what recognises the line next time (the plain form of lists before 12 Oct 2026, `RUN=60\|70`, is still read) |
 | `SCENARIO` | see above |
+| `FIRST_LISTED` | the day of the first saved list (in `outputs`) that showed this line with these same differences - how long it has been waiting. Worked out from the saved lists; nobody fills it in. A line whose differences change starts again |
 | `SQL_UPDATE` | the statement for the order - see below |
 
 For every difference in `DIFF_KEY` the two cells involved are coloured: the
-order's value (`WO_`) orange, the value it is compared with green -
-`M_`, or `C_` when tagged `(C)`. `Update - ...` rows are grey across the
-whole row, `Review - ...` rows light blue, under those two colours. Only the
-grey lines are candidates for automating the update later; blue lines always
-need a person. The colours are set
-when the list is written and do not follow later edits in the sheet.
+order's value (`WO_`) orange, the value it is compared with green - `M_`, or
+`C_` when tagged `(C)`. Under them, the whole row is coloured by scenario, in
+a **strong** shade when the line is **new** since the previous list (or its
+differences changed) and a **light** shade when it was already in the previous
+list with the same differences (since 2026-10-28):
+
+| Scenario | New | Already listed |
+|---|---|---|
+| `Update - ...` | purple | light purple |
+| `Review - ...` | blue | light blue |
+| `Resource changed` | yellow | light yellow |
+
+Light means "not new", not "approved". Only the purple lines are candidates
+for automating the update later; blue lines always need a person. Until
+2026-10-28 update rows were grey and the shade did not change. The colours
+are set when the list is written and do not follow later edits in the sheet.
 
 `M_` is the order's own master: its own revision, or the current one for an
 order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an order on

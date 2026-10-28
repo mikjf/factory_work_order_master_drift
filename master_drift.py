@@ -431,7 +431,7 @@ def level2(d, l3):
 #   Review - OPP WO differs from master (current rev)
 #                             the same two cases on an OPP order (a new
 #                             project): always reviewed by a person before
-#                             updating (PM and SC, 2026-10-23). Only the grey
+#                             updating (PM and SC, 2026-10-23). Only the purple
 #                             "Update - ..." lines may be automated later.
 #   Resource changed          the resource differs from the master compared
 #                             with (28 Sep review: 9 of 13 intentional; SC,
@@ -460,9 +460,10 @@ def level2(d, l3):
 #     field by accident. Nothing here runs anything.
 # The cells of each difference in DIFF_KEY are coloured (user, 2026-10-13):
 # the order's value (WO_) orange, the value it is compared with green (M_ or
-# C_, as tagged). "Update - ..." rows are grey across the row underneath,
-# "Review - ..." rows light blue (2026-10-23). Fills are fixed at writing time; they do not follow
-# edits made in the sheet.
+# C_, as tagged). Under them the row is coloured by scenario group, strong
+# when the line is new since the previous list, light when already listed -
+# see ROW_FILLS. Fills are fixed at writing time; they do not follow edits
+# made in the sheet.
 # M_ / M_REV: the order's own revision (= C_REV for an order moved by the
 # stale-USER_8 rule). For orders on the current revision C_ = M_.
 # ---------------------------------------------------------------------------
@@ -474,7 +475,7 @@ SCENARIOS = {  # key -> shown name; dict order = sort order of the list
     "review_cur": "Review - OPP WO differs from master (current rev)",
     "check": "Resource changed",
 }
-UPDATE_SCENARIOS = ("update", "update_cur")          # grey row: may be automated later
+UPDATE_SCENARIOS = ("update", "update_cur")          # purple row: may be automated later
 REVIEW_SCENARIOS = ("review", "review_cur")          # blue row: always reviewed (OPP)
 SQL_SCENARIOS = UPDATE_SCENARIOS + REVIEW_SCENARIOS   # get an SQL_UPDATE
 REVIEW_KINDS = ("OPP",)   # WO_KIND whose updates are always reviewed (PM and SC, 2026-10-23)
@@ -516,7 +517,7 @@ LIST_COLUMNS = (
      "WO", "WO_STATUS", "WO_CREATE_DATE", "WO_DESIRED_RLS_DATE", "OPERATION", "STEP", "M_STEP",
      "WO_REV", "M_REV", "C_REV"]
     + VALUE_COLUMNS
-    + ["DIFF_KEY", "SCENARIO", "SQL_UPDATE"])
+    + ["DIFF_KEY", "SCENARIO", "FIRST_LISTED", "SQL_UPDATE"])
 
 
 def seq_key(v):
@@ -669,25 +670,40 @@ def add_sql_update(lst):
     return written, blank
 
 
-# orange, green (Excel's "Good" fill), grey - stronger than the first pastel
-# tones (FCE4D6 / E2EFDA / EDEDED), which some screens showed as white (2026-10-21)
-FILL_WO, FILL_TARGET, FILL_UPDATE = "F8CBAD", "C6EFCE", "D9D9D9"
-FILL_REVIEW = "BDD7EE"   # light blue: OPP lines to review (2026-10-23)
+# orange, green (Excel's "Good" fill) - stronger than the first pastel tones
+# (FCE4D6 / E2EFDA), which some screens showed as white (2026-10-21)
+FILL_WO, FILL_TARGET = "F8CBAD", "C6EFCE"
+# ROW colours (user, 2026-10-28): per scenario group a HIGHLIGHTED colour for a
+# line that is new since the previous list (or whose differences changed), a
+# LIGHT one for a line already in the previous list with the same differences.
+# Light means "not new", not "approved". Updates were grey until 2026-10-28.
+ROW_FILLS = {                    # group -> (new, already listed)
+    "update": ("CCC0DA", "E4DFEC"),   # purple: may be automated later
+    "review": ("BDD7EE", "DDEBF7"),   # blue: OPP, always reviewed (2026-10-23)
+    "check": ("FFE699", "FFF2CC"),    # yellow: resource changed
+}
+
+
+def scenario_group(scenario):
+    """The ROW_FILLS group of a scenario name."""
+    keys = [k for k, v in SCENARIOS.items() if v == scenario]
+    k = keys[0] if keys else ""
+    return "update" if k in UPDATE_SCENARIOS else "review" if k in REVIEW_SCENARIOS else "check"
 
 
 def colour_differences(ws, lst):
-    """Colour the two cells of every difference in DIFF_KEY. See THE SQL UPDATER above."""
+    """Colour every row by scenario group and new / already listed, then the two
+    cells of every difference in DIFF_KEY. See THE SQL UPDATER above."""
     from openpyxl.styles import PatternFill
-    fills = {p: PatternFill("solid", start_color=c, end_color=c)
-             for p, c in (("WO", FILL_WO), ("T", FILL_TARGET), ("U", FILL_UPDATE), ("R", FILL_REVIEW))}
+    solid = lambda c: PatternFill("solid", start_color=c, end_color=c)
+    fills = {"WO": solid(FILL_WO), "T": solid(FILL_TARGET)}
+    rows = {(g, new): solid(c[0 if new else 1]) for g, c in ROW_FILLS.items() for new in (True, False)}
     pos = {c: i + 1 for i, c in enumerate(LIST_COLUMNS)}
-    row_fill = {**{SCENARIOS[k]: fills["U"] for k in UPDATE_SCENARIOS},
-                **{SCENARIOS[k]: fills["R"] for k in REVIEW_SCENARIOS}}
     coloured = 0
     for n, (_, r) in enumerate(lst.iterrows(), start=2):
-        if r.SCENARIO in row_fill:   # whole row grey / blue first, the differences on top
-            for i in range(1, len(LIST_COLUMNS) + 1):
-                ws.cell(n, i).fill = row_fill[r.SCENARIO]
+        row = rows[(scenario_group(r.SCENARIO), bool(r._NEW))]   # whole row first, the differences on top
+        for i in range(1, len(LIST_COLUMNS) + 1):
+            ws.cell(n, i).fill = row
         target = r._T   # M_ or C_: the value compared with
         for f in r._DIFF:
             ws.cell(n, pos[f"WO_{SHORT[f]}"]).fill = fills["WO"]
@@ -700,8 +716,10 @@ def write_legend(book):
     """00_Legend: how to read the list, for someone who did not build it (user,
     2026-10-23). First sheet; the workbook still opens on the list itself."""
     from openpyxl.styles import Alignment, Font, PatternFill
-    fill = {k: PatternFill("solid", start_color=c, end_color=c)
-            for k, c in (("WO", FILL_WO), ("T", FILL_TARGET), ("U", FILL_UPDATE), ("R", FILL_REVIEW))}
+    colours = {"WO": FILL_WO, "T": FILL_TARGET, "U": ROW_FILLS["update"][0], "u": ROW_FILLS["update"][1],
+               "R": ROW_FILLS["review"][0], "r": ROW_FILLS["review"][1],
+               "C": ROW_FILLS["check"][0], "c": ROW_FILLS["check"][1]}
+    fill = {k: PatternFill("solid", start_color=c, end_color=c) for k, c in colours.items()}
     S = SCENARIOS
     rows = [
         ("title", "How to read 01_SqlUpdater", "", ""),
@@ -721,7 +739,7 @@ def write_legend(book):
         ("R", S["review"] + "\n" + S["review_cur"],
          "The same two cases on an OPP order (a new project).",
          "Always review first; then update to the green value (SQL_UPDATE)."),
-        ("", S["check"],
+        ("C", S["check"],
          "The planned resource differs from the master the line follows. Often intentional "
          "(supply, PM).",
          "Check; correct by hand if needed. No SQL_UPDATE."),
@@ -729,14 +747,23 @@ def write_legend(book):
         ("head", "COLOUR", "Meaning", ""),
         ("WO", "orange", "the order's value today (WO_ column)", ""),
         ("T", "green", "the value it should have - the one SQL_UPDATE writes (M_ or C_ column)", ""),
-        ("U", "grey row", "an update line: SQL_UPDATE ready - may be automated later", ""),
-        ("R", "blue row", "a review line (OPP): SQL_UPDATE ready, only after a person has checked it", ""),
+        ("", "ROW colour", "strong = NEW since the previous list (or its differences changed); "
+                           "light = already in the previous list with the same differences. Light means "
+                           "'not new', not 'approved'.", ""),
+        ("U", "purple row", "an update line, new: SQL_UPDATE ready - may be automated later", ""),
+        ("u", "light purple row", "an update line, already listed", ""),
+        ("R", "blue row", "a review line (OPP), new: SQL_UPDATE ready, only after a person has checked it", ""),
+        ("r", "light blue row", "a review line, already listed", ""),
+        ("C", "yellow row", "a resource change, new", ""),
+        ("c", "light yellow row", "a resource change, already listed", ""),
         ("", "", "", ""),
         ("head", "COLUMNS", "Meaning", ""),
         ("", "WO_ / M_ / C_", "the order's value / its own master's / the current revision's", ""),
         ("", "WO_REV / M_REV / C_REV", "the order's revision / its master's / the current one", ""),
         ("", "STEP / M_STEP", "the order's step / the master's (different only when the master was renumbered)", ""),
         ("", "DIFF_KEY", "what differs, e.g. RUN: 60 (WO) | 70 (M) - (C) = compared with the current revision", ""),
+        ("", "FIRST_LISTED", "the date of the first saved list that showed this line with these same "
+                             "differences - how long it has been waiting", ""),
         ("", "SQL_UPDATE", "the statement for the order, built from the green cells of its row: only the values "
                            "that differ, never the resource or the step. Nothing runs it automatically.", ""),
         ("", "", "", ""),
@@ -821,6 +848,35 @@ def find_previous(folder, out):
         except Exception:
             continue
     return None
+
+
+def list_day(path):
+    """The day a saved list stands for: from its name, else when it was saved."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
+    return m.group(1) if m else f"{datetime.fromtimestamp(path.stat().st_mtime):%Y-%m-%d}"
+
+
+def list_history(folder, out):
+    """{line key: day of the first saved list that showed it} over every list in
+    folder except out (the one being written). A line key includes its
+    differences, so a line whose differences changed starts again. For
+    FIRST_LISTED (user, 2026-10-28)."""
+    wanted = {LIST_SHEET, OLD_DRIFT_LIST_SHEET, *OLD_LIST_SHEETS, *OLD_REVIEW_SHEETS}
+    first = {}
+    for p in folder.glob("*.xlsx"):
+        if p.name.startswith("~$") or p.resolve() == out.resolve():
+            continue
+        try:
+            if not wanted & set(pd.ExcelFile(p).sheet_names):
+                continue
+            keys = line_key(read_previous(p), "SEQ")
+        except (Exception, SystemExit):
+            continue    # not a list this script can read - ignored here
+        day = list_day(p)
+        for k in keys:
+            if k not in first or day < first[k]:
+                first[k] = day
+    return first
 
 
 def same_value(a, b, field):
@@ -1009,6 +1065,14 @@ def main():
     prev = read_previous(prev_path) if prev_path else None
     stale_wos = stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else []
     fates = fates_since_last(prev, d, lst, stale_wos, l3)
+    # new since the previous list, or already in it with the same differences
+    # (row colour), and the day it was first listed (user, 2026-10-28)
+    keys = line_key(lst, "STEP", "WO")
+    prev_keys = set(line_key(prev, "SEQ")) if prev is not None and not prev.empty else set()
+    lst["_NEW"] = [k not in prev_keys for k in keys]
+    history = list_history(PRIVATE_DIR / "outputs", out)
+    today = list_day(out)
+    lst["FIRST_LISTED"] = [history.get(k, today) for k in keys]
     sql_written, sql_blank = add_sql_update(lst)   # lst is in its final order here
 
     not_extracted = int((l3.CATEGORY == "MASTERS_NOT_EXTRACTED").sum()) if not l3.empty else 0
@@ -1043,7 +1107,8 @@ def main():
     ]
     for key, name in SCENARIOS.items():
         part = lst[lst.SCENARIO == name]
-        summary.append((f"Scenario - {name}", f"{len(part)} lines, {part.WO.nunique()} work orders"))
+        summary.append((f"Scenario - {name}", f"{len(part)} lines, {part.WO.nunique()} work orders - "
+                                              f"{int(part._NEW.sum())} new, {int((~part._NEW).sum())} already listed"))
     summary += [
         ("SQL_UPDATE - statements written (Update and Review scenarios)", sql_written),
         ("SQL_UPDATE - update lines left empty (value or WO_OPS_ROWID blank)", sql_blank),
