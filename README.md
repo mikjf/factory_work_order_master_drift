@@ -38,6 +38,9 @@ crew still counts as 1, so a missing crew does not hide the routing. `RUN_HRS` a
 - Parts `M.%`.
 - Unreleased (`U`) work orders are out - in practice old orders set back.
 - External operations (names starting `E `) are out.
+- Blocked work orders (`OdP Bloccato` ticked in the order header) are out
+  (since 2026-11-03). The query flags them as `WO_BLOCKED`, and the script
+  leaves them out and counts them in `00_Summary`.
 - 4-digit sequences only. Work orders from before the masters were
   renumbered keep 2- or 3-digit sequences and are not covered yet.
 

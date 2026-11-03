@@ -199,6 +199,13 @@ def normalise_drift(d, name, warnings):
     # WORKORDER_OPS_ROWID is optional: exports before 2026-10-12 lack it
     if "WORKORDER_OPS_ROWID" not in d:
         d["WORKORDER_OPS_ROWID"] = pd.NA
+    # WO_BLOCKED (OdP Bloccato) is new on 2026-11-03: older exports cannot
+    # tell, so nothing is left out and the run says so
+    if "WO_BLOCKED" not in d:
+        d["WO_BLOCKED"] = 0
+        warnings.append(f"{name}: no WO_BLOCKED column (export before 2026-11-03) - "
+                        "blocked orders are not left out; run without --no-extract")
+    d["WO_BLOCKED"] = pd.to_numeric(d.WO_BLOCKED, errors="raise").astype(int)
     # pairing by unique name (2026-10-21): exports before it paired by
     # sequence + name only, and did not say why a line had no master line
     matched = d.NO_MASTER_LINE == 0
@@ -768,6 +775,7 @@ def write_legend(book):
                            "that differ, never the resource or the step. Nothing runs it automatically.", ""),
         ("", "", "", ""),
         ("head", "NOT LISTED", "Counted in 00_Summary", ""),
+        ("", "blocked orders", "orders with OdP Bloccato ticked (order header, Altro tab): left out", ""),
         ("", "matching lines", "the order already has the values of the master it follows", ""),
         ("", "no master line", "steps added to the order on the go (rework, samples): nothing to compare", ""),
         ("", "not paired", "older-revision lines that cannot be paired with the current revision without guessing", ""),
@@ -893,10 +901,12 @@ def same_value(a, b, field):
     return norm(a) == norm(b)
 
 
-def fates_since_last(prev, d, lst, stale_wos, l3):
+def fates_since_last(prev, d, lst, stale_wos, l3, blocked):
     """What happened to each line of the previous list that is not listed again unchanged.
 
     FATE, in this order:
+      left out - order blocked       its work order is blocked (OdP Bloccato) and
+                                     no longer compared (2026-11-03)
       moved by USER_8 rule           its work order is now on 05_StaleUser8
       step replaced by another       the order still has the step open, but under
         operation                    another operation name - the line was
@@ -935,6 +945,8 @@ def fates_since_last(prev, d, lst, stale_wos, l3):
         by_line.setdefault((w, s, o), i)
         steps.add((w, s))
     stale = {code(w) for w in stale_wos}
+    blocked_lines = set(zip(blocked.WORK_ORDER.map(code), blocked.OPERATION_SEQUENCE.map(seq_key),
+                            blocked.OPERATION.map(code)))
     rows = []
     for (w, s, op, dk), scen, raw_dk in zip(line_key(prev, "SEQ"), prev.SCENARIO, prev.DIFF_KEY):
         # scenarios no longer listed (2026-10-21) - lines without a master
@@ -948,7 +960,9 @@ def fates_since_last(prev, d, lst, stale_wos, l3):
         # "Differs from ..." scenario, whose earliest lists had no tags
         tag = "C" if "(C)" in str(raw_dk) or str(scen).startswith("Differs from") else "M"
         now = ""
-        if w in stale:
+        if (w, s, op) in blocked_lines:
+            fate = "left out - order blocked"
+        elif w in stale:
             fate = "moved by USER_8 rule"
         elif (w, s, op) not in by_line:
             fate = "step replaced by another operation" if (w, s) in steps else "started, closed or removed"
@@ -1049,6 +1063,11 @@ def main():
     flag_problems = check_level1_flags(d)
     if flag_problems:
         sys.exit(f"level 1 flags disagree with the recomputation: {flag_problems}")
+    # blocked orders (OdP Bloccato) are left out before anything else and
+    # only counted (2026-11-03)
+    n_all, n_all_wos = len(d), d[WO_KEY].drop_duplicates().shape[0]
+    blocked = d[d.WO_BLOCKED == 1]
+    d = d[d.WO_BLOCKED == 0].copy()
     d, stale = apply_stale_user8(d, m)
 
     l3 = level3(d, m)
@@ -1064,7 +1083,7 @@ def main():
     by_name_listed = int(lst.STEP.map(seq_key).ne(lst.M_STEP.map(seq_key)).sum())
     prev = read_previous(prev_path) if prev_path else None
     stale_wos = stale.WORK_ORDER.tolist() if "WORK_ORDER" in stale else []
-    fates = fates_since_last(prev, d, lst, stale_wos, l3)
+    fates = fates_since_last(prev, d, lst, stale_wos, l3, blocked)
     # new since the previous list, or already in it with the same differences
     # (row colour), and the day it was first listed (user, 2026-10-28)
     keys = line_key(lst, "STEP", "WO")
@@ -1093,8 +1112,11 @@ def main():
         ("Check: duplicate operation keys", dup),
         ("Check: level 1 flags recomputed", "all agree"),
         ("", ""),
-        ("Open, not-started WO operations", len(d)),
-        ("Work orders", d[WO_KEY].drop_duplicates().shape[0]),
+        ("Open, not-started WO operations", n_all),
+        ("Work orders", n_all_wos),
+        ("Blocked work orders - OdP Bloccato (left out, not listed)",
+         f"{len(blocked)} lines, {blocked[WO_KEY].drop_duplicates().shape[0]} work orders"),
+        ("Lines compared (not blocked)", len(d)),
         ("Lines matching the master they follow (not listed)", matching),
         ("   of which older-revision lines matching the current revision but not their own",
          counts["matches_current_only"]),

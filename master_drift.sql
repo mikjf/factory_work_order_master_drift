@@ -31,6 +31,8 @@
 --   - "not started" = WO status F/R, op status F/R, no labour ticket.
 --     U work orders are out (user, 2026-09-28): probe 3 showed them to be
 --     old orders, none with a ticket in 2026.
+--   - blocked orders (OdP Bloccato) are out (2026-11-03): flagged here as
+--     WO_BLOCKED, left out and counted by master_drift.py.
 --   - PART_SITE joined on PART_ID only; probe 2a (2026-09-28) found one row
 --     per part, so no fan-out today.
 -- ASSUMED, watched by master_drift.py:
@@ -48,6 +50,22 @@ SELECT
          WHEN WO.BASE_ID LIKE '%OP'  THEN 'OP'
     END                         AS WO_KIND,
     WO.STATUS                   AS WO_STATUS,
+    -- ADDED 2026-11-03: 1 = the order is blocked ("OdP Bloccato", a checkbox
+    -- on the Altro tab of the order header = user field UDF-0000073).
+    -- master_drift.py leaves blocked orders out of the list and counts them.
+    -- DOCUMENT_ID is 'W~' + base + three key parts; on the one order checked
+    -- (lot 1, split 0, sub 0) it read '~0~1~0': the lot is the middle part,
+    -- which 0 is the split and which the sub is not known - both are accepted.
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM dbo.USER_DEF_FIELDS AS UDF
+        WHERE UDF.PROGRAM_ID = 'VMMFGWIN_WO'
+          AND UDF.ID = 'UDF-0000073'
+          AND UDF.BOOL_VAL = 1
+          AND UDF.DOCUMENT_ID IN (
+              'W~' + WO.BASE_ID + '~' + WO.SPLIT_ID + '~' + WO.LOT_ID + '~' + WO.SUB_ID,
+              'W~' + WO.BASE_ID + '~' + WO.SUB_ID + '~' + WO.LOT_ID + '~' + WO.SPLIT_ID)
+    ) THEN 1 ELSE 0 END         AS WO_BLOCKED,
     WO.USER_9                   AS PROJECT_CODE,
     (
         SELECT STRING_VAL
