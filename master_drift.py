@@ -8,7 +8,7 @@ Inputs: the results of
   old_revision_masters.sql  master lines of the own and the current revision,
                             for parts with older-revision WOs
 By default extract.py runs both against the ERP (read-only, Windows login,
-settings in <repo>_private\\extract.ini) and saves them as Parquet in
+settings in factory_shared_private\\connections\\visual.ini) and saves them as Parquet in
 <repo>_private\\data\\ - together, so they always come from the same moment
 (since 2026-10-15). The manual route still works: --drift and --masters take
 exports pasted into Excel, as used until then; the script warns if the two
@@ -1006,8 +1006,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--no-extract", action="store_true",
                     help="build from the last extract in <repo>_private\\data instead of querying the ERP")
-    ap.add_argument("--config", type=Path, default=PRIVATE_DIR / "extract.ini",
-                    help="database settings for the extract (default: <repo>_private\\extract.ini)")
+    ap.add_argument("--config", type=Path,
+                    default=REPO_DIR.parent / "factory_shared_private" / "connections" / "visual.ini",
+                    help="database settings for the extract "
+                         "(default: factory_shared_private\\connections\\visual.ini)")
     ap.add_argument("--drift", type=Path, help="manual route: an export of master_drift.sql (.xlsx or .parquet)")
     ap.add_argument("--masters", type=Path, help="manual route: an export of old_revision_masters.sql")
     ap.add_argument("--out", type=Path, help="default: <repo>_private\\outputs\\master_drift_list_<today>.xlsx")

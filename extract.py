@@ -12,7 +12,7 @@ the type SQL Server gives it, so the queries stay exactly as written - no
 markers, no casts for Excel's sake.
 
 Connection settings come from
-../factory_work_order_master_drift_private/extract.ini (or --config), never
+../factory_shared_private/connections/visual.ini (or --config), never
 from this repository:
 
     [database]
@@ -61,6 +61,7 @@ import pyodbc
 
 HERE = pathlib.Path(__file__).resolve().parent
 PRIVATE = HERE.parent / f"{HERE.name}_private"
+CONFIG = HERE.parent / "factory_shared_private" / "connections" / "visual.ini"
 QUERIES = ("master_drift.sql", "old_revision_masters.sql")
 MANIFEST = "extract_manifest.json"
 FETCH_ROWS = 50_000
@@ -71,7 +72,7 @@ DEADLOCK_WAIT = 10          # seconds between attempts
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--config", type=pathlib.Path, default=PRIVATE / "extract.ini")
+    p.add_argument("--config", type=pathlib.Path, default=CONFIG)
     p.add_argument("--out", type=pathlib.Path, default=PRIVATE / "data")
     return p.parse_args()
 

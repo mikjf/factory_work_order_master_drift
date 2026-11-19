@@ -75,7 +75,7 @@ It runs both queries against the ERP through `extract.py`, then builds the
 list. Built the same way as `factory_planner`'s extract:
 
 - **Read-only, Windows login.** No user name or password is stored. Server
-  and database names are in `..\factory_work_order_master_drift_private\extract.ini`,
+  and database names are in `..\factory_shared_private\connections\visual.ini`,
   never in this repository:
 
   ```
