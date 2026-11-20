@@ -1,5 +1,9 @@
 # Work-order master drift
 
+#### -- Project Status: [Completed]
+
+## Objective
+
 Lists open, not-started work-order operations whose values no longer match
 their master routing.
 
@@ -9,9 +13,39 @@ time - the work orders already created keep the old values, so planning and
 production run on an outdated standard until they finish. This tool finds
 them. It is **read-only**: it produces a list; nothing is written to the ERP.
 
-It follows on from `factory_time_statistics` (FTS), which proposes new master
-values: key the new masters, run this, see which open orders still carry the
-old ones.
+It follows on from
+[factory_time_statistics](https://github.com/mikjf/factory_time_statistics),
+which proposes new master values: key the new masters, run this, see which
+open orders still carry the old ones.
+
+### What this project demonstrates
+
+- **Comparing an ERP's copies against their source:** every open operation is
+  paired with the master line it was copied from, even when the master was
+  renumbered or revised since, and every pairing that cannot be trusted is
+  counted rather than guessed
+- **A reviewable output, not an automatic one:** an Excel list where every
+  difference is coloured, every row has one scenario, and each update is a
+  spreadsheet formula that writes the SQL `UPDATE` from the cells beside it -
+  nothing runs anything
+- **Follow-up across runs:** each list is compared with the previous one, so it
+  shows what was fixed, what is new and how long each line has been waiting
+- **Safe database access:** read-only, Windows login, both queries saved
+  together or not at all, and every read gives way to ERP users
+- **Self-checks:** the SQL's own flags are recomputed in Python, fan-out and
+  type errors stop the run, and exit codes say when a person must look
+
+### Tech stack
+
+- Python 3.12, pandas, openpyxl, pyarrow
+- pyodbc and SQL Server (T-SQL) on Infor VISUAL ERP
+
+### Data
+
+The extracts, the exports and the list name real parts, work orders and
+projects. They live in a private folder next to this repository, which is never
+a repository itself; the `.gitignore` and a commit hook keep data files out of
+here.
 
 ## Terms
 
@@ -27,7 +61,7 @@ Compared fields: planned resource, `RUN_TYPE`, `RUN`, `LOAD_SIZE_QTY`,
 `SETUP_HRS` and `USER_5` (planned crew). An empty crew against a filled one
 is a difference (since 2026-10-23: the crew must be filled in correctly;
 until then empty counted as 1); empty against empty is equal. To recognise
-which routing an order carries (the `USER_8` rule below, level 3), an empty
+which routing an order carries (the `USER_8` rule in [DESIGN.md](DESIGN.md), level 3), an empty
 crew still counts as 1, so a missing crew does not hide the routing. `RUN_HRS` and
 `CALC_START_QTY` depend on the order quantity and are not compared.
 
@@ -51,17 +85,6 @@ crew still counts as 1, so a missing crew does not hide the routing. `RUN_HRS` a
 | **1** | each WO operation with the master of **its own revision**, as that master is today | same sequence and same operation name - exact, since the WO copied that revision line by line; failing that, the same name when it is unique in the master and in the order (master renumbered) | firm |
 | **2** | - | one row per WO built on an **older** revision than the current one: the routing itself changed, a planner reviews the whole order | firm |
 | **3** | older-revision WO operations with the **current** revision's master | a new revision usually inserts a step and shifts later ones, so sequence numbers do not match. Lines are paired only when the name is unique in both revisions, when all its occurrences carry the same values, or when each occurrence has its own resource. Everything else is reported as not compared | **firm where paired** - since 2026-10-21 the current revision is the reference, so these pairings drive the list for older-revision orders: the order's line is matched to its own revision (level 1), and the name is unambiguous in both revisions. The "name repeats with different values" lines stay unpaired - to be reviewed |
-
-### When `USER_8` is out of date
-
-`USER_8` is only a label. An order can carry the current revision's routing
-while `USER_8` still names an older one. When every not-started line of an
-older-revision order matches the current master - sequence, operation name
-and every compared value - and they do not all match its own revision, the
-order is treated as being on the current revision: it is compared with the
-current master and listed on `05_StaleUser8`. Without this, such orders
-showed false differences and false "no master line" rows. The rule counts
-only exact matches (same step and name), not lines paired by name.
 
 ## Running it
 
@@ -99,162 +122,22 @@ list. Built the same way as `factory_planner`'s extract:
 extract without querying the ERP; it warns if a query file changed since.
 `python extract.py` runs only the extract.
 
-The manual route of Excel exports still works, for older exports:
-`--drift <file> --masters <file>`. It warns if the two were saved on different
-days, or if their resource IDs were turned into numbers. Exports of 13-14 Oct
-2026 carry resource IDs as `RES:034`; the marker is stripped.
-
 The list is written to
 `..\factory_work_order_master_drift_private\outputs\master_drift_list_<date>.xlsx`.
-`--out`, `--previous` and `--config` override the paths.
+Manual Excel exports still work as input, and `--out`, `--previous` and
+`--config` override the paths - see [DESIGN.md](DESIGN.md#manual-exports-and-paths).
 
-### The SQL updater list
-
-`01_SqlUpdater` holds one row per open, not-started line that does **not**
-match the master it follows (lines that match are only counted).
-
-**Lines without a master line are not listed** (since 2026-10-21, after
-PM and SC): steps added to the order on the go - rework `S RIL ...`, samples -
-have nothing to compare with. `00_Summary` counts them by reason: the step is
-not in the master; its name repeats in the master or the order, so it is not
-paired; or the order's revision has no master.
-
-**A step renumbered in the master is still compared.** A master can be
-renumbered after an order was created (a step inserted, the later ones moved
-by 100 or 200), so the order's step number is no longer in it. When the
-operation name occurs exactly once in the master and exactly once among all
-the order's operations, the query pairs the two lines by name
-(`MATCHED_BY = UNIQUE_NAME`); `M_STEP` then shows the master's step next to
-the order's `STEP`. Before, such lines showed as "no master line" and hid
-real differences.
-
-**The reference is the current revision** (PM and SC, 2026-10-21). An order
-created on an older revision follows the **current** revision of the master -
-the one `PART_SITE.ENGINEERING_MSTR` names - not the one it was created from:
-an order still carrying its old revision's rate is brought to the current
-one, and an order that already carries the current rate is left alone. So:
-
-- an order on the current revision is compared with its master line (`M_`),
-  paired exactly;
-- an order on an older revision is compared with the current revision (`C_`),
-  through the level 3 pairing of its exact own-revision line: unique name,
-  identical occurrences, or each occurrence on its own resource. Lines level 3
-  cannot pair - the name repeats with different values, the step no longer
-  exists in the current revision - are counted by reason in `00_Summary`, not
-  listed: their current value is unknown.
-
-Each listed row has exactly one `SCENARIO`:
-
-| `SCENARIO` | Meaning | Basis |
-|---|---|---|
-| `Update - WO differs from master (WO rev)` | order on its master's revision (the current one); same resource, another value differs from that master | 28 Sep review: 51 of 51 - the order follows the master |
-| `Update - WO differs from master (current rev)` | order on an older revision; same resource, another value differs from the current revision | PM and SC, 2026-10-21 |
-| `Review - OPP WO differs from master (WO rev)`, `Review - OPP WO differs from master (current rev)` | the same two cases on an **OPP** order (a new project) | PM and SC, 2026-10-23: OPP updates are always reviewed by a person first |
-| `Resource changed` | the resource differs from the master the line follows | 28 Sep review: 9 of 13 intentional; SC: "should be" intentional - kept listed |
-
-The names say which master the order differs from, not why: the cause may be
-a master corrected later, a master wrong when the order was created, or an
-order edited (user, 2026-10-23). Earlier names: `Work order to update` and
-`Work order to update (current revision)`; before 2026-10-21 also `Differs
-from current master (WO on older revision)` (the current-rev case) and `Work
-order matches current master`, now not listed: such an order is correct as
-it is. The `00_Legend` sheet explains scenarios, colours and columns to the
-reader.
-
-Columns, in order:
-
-| Columns | Content |
-|---|---|
-| `WO_OPS_ROWID`, `M_OPS_ROWID`, `C_MASTER_OPS_ROWID` | the order's operation line, its own master line, the current revision's line |
-| `FAMILY`, `PART_ID`, `PART_DESCRIPTION` | which part |
-| `WO`, `WO_STATUS`, `WO_CREATE_DATE`, `WO_DESIRED_RLS_DATE` | which order |
-| `OPERATION`, `STEP`, `M_STEP` | which step: `STEP` = the order's sequence number, `M_STEP` = the master line's (different only when paired by name) |
-| `WO_REV`, `M_REV`, `C_REV` | the order's revision (`USER_8`), its master's, the current one - `WO_REV` ≠ `C_REV` marks an order on an older revision |
-| `WO_/M_/C_` + `RES_ID`, `RUN_TYPE`, `RUN`, `LSQ` (load size), `SETUP_HRS`, `CREW` | the order's, its own master's and the current revision's values side by side |
-| `DIFF_KEY` | what differs, each value tagged with its source, e.g. `RUN: 60 (WO) \| 70 (M); SETUP_HRS: 0 (WO) \| 1 (M)` - `(C)` when compared with the current revision (an order on an older revision). Also what recognises the line next time (the plain form of lists before 12 Oct 2026, `RUN=60\|70`, is still read) |
-| `SCENARIO` | see above |
-| `FIRST_LISTED` | the day of the first saved list (in `outputs`) that showed this line with these same differences - how long it has been waiting. Worked out from the saved lists; nobody fills it in. A line whose differences change starts again |
-| `SQL_UPDATE` | the statement for the order - see below |
-
-For every difference in `DIFF_KEY` the two cells involved are coloured: the
-order's value (`WO_`) orange, the value it is compared with green - `M_`, or
-`C_` when tagged `(C)`. Under them, the whole row is coloured by scenario, in
-a **strong** shade when the line is **new** since the previous list (or its
-differences changed) and a **light** shade when it was already in the previous
-list with the same differences (since 2026-10-28):
-
-| Scenario | New | Already listed |
-|---|---|---|
-| `Update - ...` | purple | light purple |
-| `Review - ...` | blue | light blue |
-| `Resource changed` | yellow | light yellow |
-
-The list is ordered by these colours, top to bottom as in the table (new
-before already listed in each scenario group), and inside each block by
-`FIRST_LISTED`, newest first - the longest-waiting lines at the bottom.
-
-Light means "not new", not "approved". Only the purple lines are candidates
-for automating the update later; blue lines always need a person. Until
-2026-10-28 update rows were grey and the shade did not change. The colours
-are set when the list is written and do not follow later edits in the sheet.
-
-`M_` is the order's own master: its own revision, or the current one for an
-order whose `USER_8` is out of date (then `M_REV` = `C_REV`). For an order on
-the current revision `C_` = `M_`.
-
-**`SQL_UPDATE`** is written on the `Update - ...` and `Review - ...` scenarios
-(on a review line it is ready for after the review):
-
-```
-UPDATE OPERATION SET RUN = '90', SETUP_HRS = '0.5' WHERE ROWID = <WO_OPS_ROWID>;
-```
-
-- it sets only the fields that differ, to the value the line is compared
-  with - `M_` on `(WO rev)`, `C_` on `(current rev)` - never the resource,
-  never the step number;
-- it is a **spreadsheet formula**, not text: it reads those cells and
-  `WO_OPS_ROWID` of its own row, so correcting a value in the sheet corrects
-  the statement; the column letters are derived from the column order;
-- it is left **empty** when a value or `WO_OPS_ROWID` is blank, so nothing
-  can blank a field by accident;
-- `Resource changed` gets no statement: a resource change needs a person.
-  Nothing here runs anything - it produces the SQL and leaves running it to
-  a person who has read it.
-
-Leave the list where it is: the next run reads the most recently saved list
-in the `outputs` folder, other than the one it is about to overwrite (or
-`--previous <file>`), and fills `02_SinceLastList`,
-matching lines on order, step, operation and the same differences. Lists of
-every earlier layout are still read.
-
-### Output sheets
+## Output
 
 | Sheet | Content |
 |---|---|
 | `00_Legend` | how to read the list - scenarios, colours, columns - for someone who did not build it. The workbook opens on `01_SqlUpdater` |
 | `00_Summary` | counts per scenario, the lines not listed by reason (no master line; older revision not paired with the current one), lines paired by name, checks, input files, what happened since the previous list |
-| `01_SqlUpdater` | **the list**, with the update statements - see above |
+| `01_SqlUpdater` | **the list**, with the update statements - see [DESIGN.md](DESIGN.md#the-sql-updater-list) |
 | `02_SinceLastList` | what happened to each line of the previous list that is not listed again unchanged: **fixed - order updated** (the order now carries the value the list proposed), **partly fixed - still listed** (some values corrected, the rest still listed - `DIFF_KEY_NOW` shows what is left), fixed - master updated / both changed / now matches, **started, closed or removed** (mostly produced on the values it had - the export cannot tell a started step from a deleted one), **step replaced by another operation** (same step number, another operation name: removed or renamed, not fixed), **not compared - current revision not paired** (an older-revision order level 3 cannot pair: not listed, but not known to match), still listed but changed, or moved by the `USER_8` rule. Lines of scenarios no longer listed are not followed up. Shows whether the list is acted on |
 | `03_OldRevisionWOs` | level 2, one row per work order on an older revision, with its level 1 and level 3 counts |
 | `04_CrossRevision` | level 3, every older-revision line with its pairing category and, where compared, the current revision's values (`CUR_*`, `D3_*`) - the basis of `Update - WO differs from master (current rev)` |
 | `05_StaleUser8` | orders moved onto the current routing because `USER_8` is out of date, with what they showed before |
-
-### Exit codes and checks
-
-| Code | Meaning |
-|---|---|
-| 0 | clean |
-| 1 | stopped: the extract failed (the previous one is kept), an input is missing, an operation appears twice (a join fanned out), a numeric field holds text, or the level 1 flags from the SQL disagree with the script's own recomputation |
-| 2 | the list was written, but something needs a look - explained on a `!!` line: a query changed since the extract used (`--no-extract`), manual exports from different days or with resource IDs turned into numbers, or the masters result does not cover every older-revision line |
-
-The script refuses to write inside this repository.
-
-## Data never goes in this repository
-
-The extracts, the exports and the list name real parts, work orders and projects. They live
-in the private folder next to this one, which is never a repository; the
-`.gitignore` and a commit hook keep data files out of here. Commit messages
-describe changes by shape, never by part, order, project or family.
 
 ## Environment
 
@@ -276,3 +159,8 @@ Outside the Anaconda prompt, call the environment's Python by its full path
 
 The database route also needs Microsoft's **ODBC Driver 18 for SQL Server**
 installed on the machine (`pyodbc` talks to the database through it).
+
+## Design notes
+
+How an order with an out-of-date `USER_8` is handled, the SQL updater list in
+full, and the exit codes are in [DESIGN.md](DESIGN.md).
